@@ -219,6 +219,7 @@ function sanitizeName(name) {
 // --- Agent State ---
 const agents = new Map(); // id -> agent object
 const msgToAgent = new Map(); // prefixed msg id -> agent id
+const topicToAgent = new Map(); // telegram thread id (string) -> agent id
 const deletedAgents = new Map(); // id -> deleted agent object
 // --- Adapter State ---
 const adapters = []; // active adapter instances
@@ -1080,15 +1081,19 @@ function saveState() {
                 cwd: agent.cwd || null,
                 deletedAt: agent.deletedAt || null,
                 source: agent.source || 'whatsapp',
+                telegramTopicId: agent.telegramTopicId || null,
             };
         }
     }
     writeFileSync(AGENTS_FILE, JSON.stringify(data, null, 2));
 
-    // Save routing map
+    // Save routing map (msg routes + telegram topic routes)
     const routing = {};
     for (const [msgId, agentId] of msgToAgent) {
         routing[msgId] = agentId;
+    }
+    for (const [threadId, agentId] of topicToAgent) {
+        routing[`tgtopic:${threadId}`] = agentId;
     }
     writeFileSync(ROUTING_FILE, JSON.stringify(routing, null, 2));
 
@@ -1110,6 +1115,7 @@ function loadState() {
                 if (!agent.backend) agent.backend = 'claude-code';
                 if (!agent.model) agent.model = 'sonnet';
                 if (!agent.cwd) agent.cwd = null;
+                if (!agent.telegramTopicId) agent.telegramTopicId = null;
                 if (agent.status === 'active') {
                     // Respect saved hasRun — /reset sets it to false with a new session UUID.
                     // Default to true for backward compat (pre-reset agents without the field).
@@ -1130,11 +1136,15 @@ function loadState() {
         try {
             const data = JSON.parse(readFileSync(ROUTING_FILE, 'utf8'));
             for (const [msgId, agentId] of Object.entries(data)) {
-                // Backward compat: old entries without prefix are assumed WhatsApp
-                const prefixed = (msgId.startsWith('wa:') || msgId.startsWith('tg:') || msgId.startsWith('slack:')) ? msgId : 'wa:' + msgId;
-                msgToAgent.set(prefixed, agentId);
+                if (msgId.startsWith('tgtopic:')) {
+                    topicToAgent.set(msgId.slice('tgtopic:'.length), agentId);
+                } else {
+                    // Backward compat: old entries without prefix are assumed WhatsApp
+                    const prefixed = (msgId.startsWith('wa:') || msgId.startsWith('tg:') || msgId.startsWith('slack:')) ? msgId : 'wa:' + msgId;
+                    msgToAgent.set(prefixed, agentId);
+                }
             }
-            console.log(`  Restored ${msgToAgent.size} message routes`);
+            console.log(`  Restored ${msgToAgent.size} message routes, ${topicToAgent.size} topic routes`);
         } catch (e) {
             console.log(`  ⚠️ Could not load routing: ${e.message}`);
         }
@@ -1150,6 +1160,19 @@ function loadState() {
 }
 
 // --- Core Agent Functions (adapter-agnostic) ---
+
+// Returns an adapter scoped to a pup's Telegram forum topic (if applicable).
+// For non-Telegram adapters or pups without a topic, returns the adapter unchanged.
+function getScopedAdapter(adapter, agent) {
+    const threadId = agent.telegramTopicId || null;
+    if (!threadId || adapter.name !== 'telegram' || !adapter.isForum || adapter._threadId) return adapter;
+    return {
+        ...adapter,
+        _threadId: threadId,
+        send: (text, replyToId, _threadId, replyMarkup) => adapter.send(text, replyToId, threadId, replyMarkup),
+        sendFile: (filePath, caption, replyToId) => adapter.sendFile(filePath, caption, replyToId, threadId),
+    };
+}
 
 async function spawnAgent(prompt, adapter, parentId = null, reuseMsgId = null, replyToId = null, model = null, forceName = null, backendName = null) {
     // Validate requested backend is available
@@ -1187,23 +1210,33 @@ async function spawnAgent(prompt, adapter, parentId = null, reuseMsgId = null, r
         source: adapter.name,
         packId: packsData.activePack,
         skills: skillsManager.list(true).map(s => s.id),  // All skills by default
+        telegramTopicId: null,
     };
     agents.set(id, agent);
+
+    // Telegram forum topics are created on-demand via the "Open Topic" inline button
+    // (no auto-creation here — the button appears on the pup's first response)
+
     saveState();
 
     console.log(`  🐕 Spawned ${name} (tmux: ${tmuxSession})`);
     timeline.emit('spawn', { agentId: id, agentName: name, backend: backend.name, meta: { source: 'adapter' } });
     await updatePinnedStatus();
 
+    // Use scoped adapter so all messages go to the pup's topic (if applicable)
+    const scopedAdapter = getScopedAdapter(adapter, agent);
+
     // Send one message that will be edited through the whole lifecycle:
     // "listening..." (voice) → "thinking..." → tool progress → final response
     let liveMsgId;
     const icon = getAgentIcon(agent);
-    if (reuseMsgId) {
-        liveMsgId = reuseMsgId;
-        await adapter.edit(reuseMsgId, `${icon} [${name}]:\n_thinking..._`);
+    // When a topic was just created, don't reuse a pre-topic listening message from main chat
+    const effectiveReuseMsgId = agent.telegramTopicId ? null : reuseMsgId;
+    if (effectiveReuseMsgId) {
+        liveMsgId = effectiveReuseMsgId;
+        await scopedAdapter.edit(effectiveReuseMsgId, `${icon} [${name}]:\n_thinking..._`);
     } else {
-        liveMsgId = await adapter.send(`${icon} [${name}]:\n_thinking..._`, replyToId);
+        liveMsgId = await scopedAdapter.send(`${icon} [${name}]:\n_thinking..._`, replyToId);
     }
     // Map both the user's original message AND the pup's response to this agent.
     // This way, Slack thread replies (which point to the thread parent = user's msg) route correctly.
@@ -1215,7 +1248,7 @@ async function spawnAgent(prompt, adapter, parentId = null, reuseMsgId = null, r
     historyManager.addUserTurn(id, prompt);
 
     // Run first prompt, pass the live message ID for editing
-    runAgentCommand(agent, prompt, adapter, liveMsgId, replyToId);
+    runAgentCommand(agent, prompt, scopedAdapter, liveMsgId, replyToId);
 
     return agent;
 }
@@ -1229,14 +1262,17 @@ async function sendToAgent(agent, text, adapter, reuseMsgId = null, replyToId = 
     }
     console.log(`  📤 Sent to ${agent.name}: ${text.substring(0, 80)}`);
     timeline.emit('message_sent', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { preview: text.substring(0, 80) } });
+
+    const scopedAdapter = getScopedAdapter(adapter, agent);
+
     // For follow-ups, send a thinking message that will be edited
     let liveMsgId;
     const icon = getAgentIcon(agent);
     if (reuseMsgId) {
         liveMsgId = reuseMsgId;
-        await adapter.edit(reuseMsgId, `${icon} [${agent.name}]:\n_thinking..._`);
+        await scopedAdapter.edit(reuseMsgId, `${icon} [${agent.name}]:\n_thinking..._`);
     } else {
-        liveMsgId = await adapter.send(`${icon} [${agent.name}]:\n_thinking..._`, replyToId);
+        liveMsgId = await scopedAdapter.send(`${icon} [${agent.name}]:\n_thinking..._`, replyToId);
     }
     if (replyToId) msgToAgent.set(replyToId, agent.id);
     if (liveMsgId) msgToAgent.set(liveMsgId, agent.id);
@@ -1245,7 +1281,7 @@ async function sendToAgent(agent, text, adapter, reuseMsgId = null, replyToId = 
     // Save user turn to history
     historyManager.addUserTurn(agent.id, text);
 
-    runAgentCommand(agent, text, adapter, liveMsgId, replyToId);
+    runAgentCommand(agent, text, scopedAdapter, liveMsgId, replyToId);
     await updatePinnedStatus();
 }
 
@@ -1493,11 +1529,16 @@ function runAgentCommand(agent, prompt, adapter, liveMsgId = null, replyToId = n
             : `${icon} [${agent.name}] (truncated):\n\n${output.substring(0, maxLen)}...`;
 
         // Final: send new message or edit in-place depending on adapter capability
+        // Attach "Open Topic" button on first response when Telegram forum is on but pup has no topic
+        let openTopicMarkup = null;
+        if (!isResume && adapter.name === 'telegram' && adapter.isForum && !agent.telegramTopicId && !agent.parentId) {
+            openTopicMarkup = { inline_keyboard: [[{ text: '🧵 Open Topic', callback_data: `open_topic:${agent.id}` }]] };
+        }
         let responseMsgId = liveMsgId;
         if (liveMsgId && adapter.capabilities?.finalMessageBehavior === 'send') {
             // Mark the thinking bubble as done, then send the result as a new message
             await adapter.edit(liveMsgId, `${icon} [${agent.name}]: ✅`);
-            const newMsgId = await adapter.send(text, replyToId || liveMsgId);
+            const newMsgId = await adapter.send(text, replyToId || liveMsgId, null, openTopicMarkup);
             if (newMsgId) {
                 responseMsgId = newMsgId;
                 msgToAgent.set(newMsgId, agent.id);
@@ -2260,6 +2301,15 @@ async function onMessage(msg) {
             }
             const count = deletedAgents.size;
             const names = [...deletedAgents.values()].map(a => a.name);
+            // Delete Telegram topics for purged agents (fire-and-forget)
+            if (adapter.name === 'telegram') {
+                for (const agent of [...deletedAgents.values()]) {
+                    if (agent.telegramTopicId) {
+                        topicToAgent.delete(String(agent.telegramTopicId));
+                        adapter.deleteForumTopic(agent.telegramTopicId).catch(() => {});
+                    }
+                }
+            }
             for (const agent of [...deletedAgents.values()]) {
                 hardDeleteAgent(agent, deletedAgents);
             }
@@ -2278,6 +2328,12 @@ async function onMessage(msg) {
             if (!result.success) {
                 await adapter.send(result.error);
                 return;
+            }
+            // Reopen Telegram topic if applicable
+            if (adapter.name === 'telegram' && result.agent.telegramTopicId) {
+                topicToAgent.set(String(result.agent.telegramTopicId), result.agent.id);
+                adapter.reopenForumTopic(result.agent.telegramTopicId).catch(() => {});
+                saveState();
             }
             await adapter.send(`🐕 *${result.agent.name}* is back! Session restored — send a message to pick up where you left off.`);
             return;
@@ -2385,6 +2441,8 @@ async function onMessage(msg) {
                 const agent = agentId && agents.get(agentId);
                 if (!agent) { await adapter.send('No agent found for that message.'); return; }
                 const agentName = agent.name;
+                if (adapter.name === 'telegram' && agent.telegramTopicId)
+                    adapter.closeForumTopic(agent.telegramTopicId).catch(() => {});
                 clearAgents([agent.name]);
                 await adapter.send(`🧹 *${agentName}* shelved.\nUse \`/reborn ${agentName}\` to bring back.`);
                 return;
@@ -2393,6 +2451,16 @@ async function onMessage(msg) {
             if (names.length === 0) {
                 await adapter.send('Usage: /clear name1 name2 ... or /clear pack or reply to a message with /clear');
                 return;
+            }
+
+            // Close Telegram topics before clearing (fire-and-forget)
+            if (adapter.name === 'telegram') {
+                const toClear = names[0]?.toLowerCase() === 'pack'
+                    ? [...agents.values()]
+                    : names.map(n => findAgentByName(n)).filter(Boolean);
+                for (const a of toClear) {
+                    if (a.telegramTopicId) adapter.closeForumTopic(a.telegramTopicId).catch(() => {});
+                }
             }
 
             const { cleared, notFound } = clearAgents(names);
@@ -2417,6 +2485,10 @@ async function onMessage(msg) {
                 const agent = agentId && (agents.get(agentId) || deletedAgents.get(agentId));
                 if (!agent) { await adapter.send('No agent found for that message.'); return; }
                 const agentName = agent.name;
+                if (adapter.name === 'telegram' && agent.telegramTopicId) {
+                    topicToAgent.delete(String(agent.telegramTopicId));
+                    adapter.deleteForumTopic(agent.telegramTopicId).catch(() => {});
+                }
                 deleteAgents([agent.name]);
                 await adapter.send(`❌ *${agentName}* permanently deleted. Name freed.`);
                 return;
@@ -2425,6 +2497,19 @@ async function onMessage(msg) {
             if (names.length === 0) {
                 await adapter.send('Usage: /delete name1 name2 ... or /delete pack or reply to a message with /delete');
                 return;
+            }
+
+            // Delete Telegram topics before removing agents (fire-and-forget)
+            if (adapter.name === 'telegram') {
+                const toDelete = names[0]?.toLowerCase() === 'pack'
+                    ? [...agents.values(), ...deletedAgents.values()]
+                    : names.map(n => findAgentByName(n) || findDeletedByName(n)).filter(Boolean);
+                for (const a of toDelete) {
+                    if (a.telegramTopicId) {
+                        topicToAgent.delete(String(a.telegramTopicId));
+                        adapter.deleteForumTopic(a.telegramTopicId).catch(() => {});
+                    }
+                }
             }
 
             const { deleted, deletedFromLosts, notFound } = deleteAgents(names);
@@ -2623,6 +2708,25 @@ async function onMessage(msg) {
         }
     }
 
+    // --- Route 0: Telegram forum topic — message inside a pup's dedicated topic ---
+    if (msg.threadId) {
+        const topicAgentId = topicToAgent.get(String(msg.threadId));
+        if (topicAgentId) {
+            const topicAgent = agents.get(topicAgentId);
+            if (topicAgent && topicAgent.status === 'active') {
+                console.log(`  ↳ Routed to ${topicAgent.name} (via topic ${msg.threadId})`);
+                sendToAgent(topicAgent, fullBody, adapter, listeningMsgId, msg.id, requestedModel);
+                return;
+            }
+            if (deletedAgents.has(topicAgentId)) {
+                const dead = deletedAgents.get(topicAgentId);
+                await adapter.send(`💀 *${dead.name}* was shelved. Use \`/reborn ${dead.name}\` to bring them back.`);
+                return;
+            }
+        }
+        // Unknown topic — fall through to normal routing (e.g. spawning)
+    }
+
     // --- Route 1: @mention at start of message (first match routes, typos error out) ---
     const atMatch = body.match(/^@(\S+)/);
     if (atMatch) {
@@ -2770,6 +2874,62 @@ async function main() {
     if (TELEGRAM_TOKEN) {
         console.log('Initializing Telegram adapter...');
         const tg = createTelegramAdapter({ token: TELEGRAM_TOKEN, chatId: TELEGRAM_CHAT_ID });
+        // When forum mode is toggled off in Telegram, clear topic data from all agents
+        tg.onForumDisabled = () => {
+            for (const [, agent] of agents) {
+                if (agent.telegramTopicId) {
+                    topicToAgent.delete(String(agent.telegramTopicId));
+                    agent.telegramTopicId = null;
+                }
+            }
+            console.log('  🧵 Cleared all topic assignments (forum disabled)');
+            saveState();
+        };
+        // Handle "Open Topic" inline button taps
+        tg.onCallbackQuery = async (cb) => {
+            const data = cb.data || '';
+            if (!data.startsWith('open_topic:')) return;
+            const agentId = data.slice('open_topic:'.length);
+            const agent = agents.get(agentId);
+            if (!agent || agent.status !== 'active') {
+                await tg.answerCallbackQuery(cb.id, 'Pup not found or inactive');
+                return;
+            }
+            if (agent.telegramTopicId) {
+                await tg.answerCallbackQuery(cb.id, 'Topic already exists');
+                return;
+            }
+            try {
+                const threadId = await tg.createForumTopic(`🐾 ${agent.name}`);
+                agent.telegramTopicId = threadId;
+                topicToAgent.set(String(threadId), agent.id);
+                saveState();
+                console.log(`  🧵 Created Telegram topic for ${agent.name} via button (thread ${threadId})`);
+                await tg.answerCallbackQuery(cb.id, `Topic created for ${agent.name}`);
+                // Remove the button from the message
+                if (cb.message) {
+                    await tg.removeReplyMarkup('tg:' + cb.message.message_id);
+                }
+                // Forward existing messages for this pup into the new topic
+                const agentMsgIds = [];
+                for (const [msgId, aId] of msgToAgent) {
+                    if (aId === agent.id && msgId.startsWith('tg:')) {
+                        agentMsgIds.push(Number(msgId.slice(3)));
+                    }
+                }
+                agentMsgIds.sort((a, b) => a - b);
+                for (const numId of agentMsgIds) {
+                    await tg.forwardMessage('tg:' + numId, threadId);
+                }
+                if (agentMsgIds.length > 0) {
+                    console.log(`  🧵 Forwarded ${agentMsgIds.length} message(s) to ${agent.name}'s topic`);
+                }
+                await updatePinnedStatus();
+            } catch (e) {
+                console.log(`  ⚠️ Could not create topic via button for ${agent.name}: ${e.message}`);
+                await tg.answerCallbackQuery(cb.id, 'Failed to create topic — need admin rights?');
+            }
+        };
         adapters.push(tg);
         await tg.initialize(onMessage);
         if (!statusMsgs.telegram) statusMsgs.telegram = null;
@@ -2816,6 +2976,7 @@ module.exports = {
     agents,
     deletedAgents,
     msgToAgent,
+    topicToAgent,
 
     // Agent lifecycle
     spawnAgent,
