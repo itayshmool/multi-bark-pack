@@ -28,11 +28,16 @@ function createTelegramAdapter({ token, chatId }) {
         const data = await res.json();
         if (!data.ok) {
             // Handle rate limiting with retry
-            if (data.error_code === 429 && data.parameters?.retry_after && retries > 0) {
-                const delay = (data.parameters.retry_after + 1) * 1000;
-                console.log(`  ⏳ Telegram rate limited, waiting ${data.parameters.retry_after}s...`);
-                await new Promise(r => setTimeout(r, delay));
-                return api(method, body, retries - 1);
+            if (data.error_code === 429 && data.parameters?.retry_after) {
+                if (retries > 0) {
+                    const delay = (data.parameters.retry_after + 1) * 1000;
+                    console.log(`  ⏳ Telegram rate limited, waiting ${data.parameters.retry_after}s...`);
+                    await new Promise(r => setTimeout(r, delay));
+                    return api(method, body, retries - 1);
+                }
+                // Exhausted retries — don't crash, just warn and return null
+                console.log(`  ⚠️ Telegram rate limit persists for ${method}, skipping after ${3} retries`);
+                return null;
             }
             throw new Error(`Telegram API ${method}: ${data.description || 'unknown error'}`);
         }
@@ -53,7 +58,7 @@ function createTelegramAdapter({ token, chatId }) {
                     lastUpdateId = update.update_id;
                     // Handle callback queries (inline button taps)
                     if (update.callback_query && adapter.onCallbackQuery) {
-                        adapter.onCallbackQuery(update.callback_query);
+                        await adapter.onCallbackQuery(update.callback_query);
                         continue;
                     }
 
