@@ -68,7 +68,7 @@ import { initExecution } from './execution.js';
 import { initAgents } from './agents.js';
 import { initCommands } from './commands.js';
 import { initDaily } from './daily.js';
-import { initApproval } from './approval.js';
+import { initApproval, getPolicy } from './approval.js';
 
 // --- Wire Dependencies ---
 
@@ -318,7 +318,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Send startup message + fresh pinned status on all adapters
+  // Send startup message with repo/context info on all adapters
   const startMessages = [
     "🐾 Pack's up!",
     '🐕 Pups online!',
@@ -327,10 +327,34 @@ async function main(): Promise<void> {
   ];
   const greeting =
     startMessages[Math.floor(Math.random() * startMessages.length)];
+
+  const contextLines: string[] = [];
+  if (REPO_PATH) {
+    const repoDisplay = REPO_NAME || REPO_PATH.split('/').pop();
+    contextLines.push(`📂 *Repo:* ${repoDisplay} (\`${REPO_PATH}\`)`);
+  }
+  const availableBackends = backends.list();
+  if (availableBackends.length > 0) {
+    const names = availableBackends.map(b => b.displayName || b.name).join(', ');
+    contextLines.push(`🤖 *Backends:* ${names} (default: ${DEFAULT_BACKEND})`);
+  }
+  const policy = getPolicy();
+  if (policy.rules.length > 0 || policy.barkignore.length > 0) {
+    const parts: string[] = [];
+    parts.push(`default: ${policy.defaultAction}`);
+    if (policy.rules.length > 0) parts.push(`${policy.rules.length} rules`);
+    if (policy.barkignore.length > 0) parts.push(`${policy.barkignore.length} protected files`);
+    contextLines.push(`🛡️ *Policy:* ${parts.join(', ')}`);
+  }
+
+  const startupMsg = contextLines.length > 0
+    ? `${greeting}\n${contextLines.join('\n')}`
+    : greeting;
+
   for (const adapter of adapters) {
     if (adapter.isReady()) {
       try {
-        await adapter.send(greeting);
+        await adapter.send(startupMsg);
       } catch {
         // ignore
       }
