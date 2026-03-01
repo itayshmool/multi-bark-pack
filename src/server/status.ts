@@ -5,7 +5,7 @@
 import { errorMessage } from '../utils/error.js';
 import { getAgentFiles } from '../utils/agent-files.js';
 import path from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import type { Agent, AgentClassification } from '../types/index.js';
 import { EXEC_OPTS, DEFAULT_BACKEND } from './config.js';
@@ -145,8 +145,32 @@ export function buildStatusText(): string {
     const projectTag = agent.cwd ? ` 📂${path.basename(agent.cwd)}` : '';
     const parentTag = agent.parentId ? ` ↳${agents.get(agent.parentId)?.name || '?'}` : '';
     const approvalTag = agent.approvalPending ? ' ⏳approval' : '';
+
+    // Activity context: running agents show phase + elapsed; idle/error show time-ago
+    let activityTag = '';
+    const files = getAgentFiles(agent.id);
+    if (status === 'run') {
+      try {
+        const phase = existsSync(files.phase) ? readFileSync(files.phase, 'utf8').trim() : '';
+        const timerMatch = existsSync(files.progress)
+          ? readFileSync(files.progress, 'utf8').match(/⏱\s*(\S+)/)
+          : null;
+        const elapsed = timerMatch ? timerMatch[1] : '';
+        if (phase || elapsed) {
+          activityTag = ` ${phase}${elapsed ? ` ${elapsed}` : ''}`;
+        }
+      } catch { /* ignore */ }
+    } else if (status === 'idle' || status === 'yelp') {
+      try {
+        if (existsSync(files.done)) {
+          const mtime = statSync(files.done).mtime;
+          activityTag = ` ${timeSince(mtime)}`;
+        }
+      } catch { /* ignore */ }
+    }
+
     lines.push(
-      `${emoji} *${agent.name}*${parentTag}${backendTag}${modelTag}${projectTag}${approvalTag} ${status}`,
+      `${emoji} *${agent.name}*${parentTag}${activityTag}${backendTag}${modelTag}${projectTag}${approvalTag}`,
     );
   }
 

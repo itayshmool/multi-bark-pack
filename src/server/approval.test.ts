@@ -544,7 +544,7 @@ describe('approval module', () => {
       await mod.requestApproval(agent, adapter, violation, 'output text', 'live-msg-1', 'reply-to-1');
 
       expect(adapter.send).toHaveBeenCalledWith(
-        expect.stringContaining('requires approval'),
+        expect.stringContaining('approval needed'),
         'reply-to-1',
       );
       expect(agent.approvalPending).not.toBeNull();

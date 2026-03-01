@@ -63,6 +63,40 @@ export function initExecution(deps: {
 
 export const MAX_MSG_LEN = 4096;
 
+export interface ResponseMeta {
+  durationMs: number;
+  toolCount: number;
+  costUsd: number | null;
+  backend: string;
+  exitCode: number;
+}
+
+export function formatDuration(ms: number): string {
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  return `${mins}m${String(secs % 60).padStart(2, '0')}s`;
+}
+
+export function buildResponseFooter(meta: ResponseMeta): string {
+  const status = meta.exitCode === 0 ? '✅' : '❌';
+  const exitTag = meta.exitCode !== 0 ? ` exit ${meta.exitCode}` : '';
+  const parts = [`${status}${exitTag}`, formatDuration(meta.durationMs)];
+  if (meta.toolCount > 0) parts.push(`🔧 ${meta.toolCount} tools`);
+  if (meta.costUsd !== null && meta.costUsd > 0) parts.push(`$${meta.costUsd < 0.01 ? meta.costUsd.toFixed(4) : meta.costUsd.toFixed(2)}`);
+  parts.push(meta.backend);
+  return `\n\n━\n${parts.join(' · ')}`;
+}
+
+export function buildDoneReceipt(agent: Agent, meta: ResponseMeta): string {
+  const icon = getAgentIcon(agent);
+  const status = meta.exitCode === 0 ? '✅' : '❌';
+  const parts = [formatDuration(meta.durationMs)];
+  if (meta.toolCount > 0) parts.push(`🔧 ${meta.toolCount}`);
+  if (meta.costUsd !== null && meta.costUsd > 0) parts.push(`$${meta.costUsd < 0.01 ? meta.costUsd.toFixed(4) : meta.costUsd.toFixed(2)}`);
+  return `${icon} ${agent.name} ${status} ${parts.join(' · ')}`;
+}
+
 export function buildSystemPrompt(agent: Agent, isResume: boolean): string {
   const cwdFile = path.join(TMP_DIR, `${agent.id}.cwd`);
   const sendDir = path.join(TMP_DIR, `${agent.id}-send`);
@@ -81,16 +115,31 @@ export function buildSystemPrompt(agent: Agent, isResume: boolean): string {
       `</personality>`,
 
     `<response_format>\n` +
-      `Your responses are delivered to a mobile chat app (WhatsApp/Telegram/Slack).\n` +
-      `- Lead with the result or status — the human may only read the first message.\n` +
-      `- Be concise: 1-3 short paragraphs when possible. No filler, no preamble.\n` +
-      `- Use Markdown: *bold*, _italic_, \`code\`, \`\`\`code blocks\`\`\`.\n` +
-      `- Use bullet points and numbered lists for structure.\n` +
-      `- Long responses are auto-split into multiple messages — use blank lines between sections so splits are clean.\n` +
+      `Your responses are delivered to a mobile chat app (WhatsApp/Telegram/Slack). The human reads on a phone screen.\n\n` +
+
+      `*Structure & Length*\n` +
+      `- Lead with the result or status — the human may only see the first message.\n` +
+      `- Be concise: 1-3 short paragraphs when the task is simple. Don't pad with filler.\n` +
+      `- For complex tasks, give enough detail to be useful — but never dump raw output or full files.\n` +
+      `- Long responses are auto-split into multiple numbered messages — use blank lines between sections so splits are clean.\n` +
+      `- Keep each logical section under ~500 chars so the auto-splitter can break cleanly.\n\n` +
+
+      `*Always explain what you did and why*\n` +
+      `- Don't just say "done" — briefly describe what you changed, why, and the outcome.\n` +
+      `- For code changes: name the files edited, describe the change, show 1 key snippet (5-15 lines max).\n` +
+      `- For investigations: state what you found, not just the raw data.\n` +
+      `- For errors: explain what went wrong and what you'll try next.\n\n` +
+
+      `*Formatting for mobile*\n` +
+      `- Use Markdown: *bold* for emphasis, \`code\` for identifiers, \`\`\`code blocks\`\`\` for snippets.\n` +
+      `- Use bullet points and numbered lists for structure — walls of text are unreadable on mobile.\n` +
       `- NO wide tables, ASCII art, or horizontal rules — they break on mobile screens.\n` +
-      `- For code changes: describe what changed, show only the key snippet (5-15 lines). Don't dump full files.\n` +
-      `- End with clear status: what's done, what's next, or what input you need.\n` +
-      `- Sign off with a short dog-flavored one-liner when the task is done (e.g. "Ready for walkies to production!" or "This pup's work here is done. *sits*").\n` +
+      `- Avoid _italic_ with underscored text (breaks Markdown: _auth_module_ renders wrong). Use *bold* instead.\n\n` +
+
+      `*End with status*\n` +
+      `- Always end with clear status: what's done, what's next, or what input you need.\n` +
+      `- A metadata footer (duration, cost, tools) is automatically appended — do NOT add your own stats.\n` +
+      `- Sign off with a short dog-flavored one-liner when the task is complete.\n` +
       `</response_format>`,
 
     REPO_PATH
@@ -164,12 +213,14 @@ export function formatAgentMessage(
 ): string {
   const icon = getAgentIcon(agent);
   const isProgress = opts.isProgress ?? false;
-  const prefix = isProgress ? `${icon} [${agent.name}]:\n` : `${icon} [${agent.name}]:\n\n`;
+  const prefix = isProgress
+    ? `${icon} ${agent.name} · ${agent.backend}\n`
+    : `${icon} ${agent.name}:\n\n`;
   const budget = MAX_MSG_LEN - prefix.length - 4;
   if (output.length <= budget) return prefix + output;
   const truncPrefix = isProgress
     ? prefix
-    : `${icon} [${agent.name}] (truncated):\n\n`;
+    : `${icon} ${agent.name} (truncated):\n\n`;
   const truncBudget = MAX_MSG_LEN - truncPrefix.length - 4;
   return truncPrefix + output.substring(0, truncBudget) + '...';
 }
@@ -224,7 +275,8 @@ export function prepareAgentRun(
   writeFileSync(files.prompt, actualPrompt);
   writeFileSync(files.running, '1');
   const violationPath = path.join(TMP_DIR, `${agent.id}.violation`);
-  for (const f of [files.out, files.done, files.progress, violationPath]) {
+  const eventsPath = path.join(TMP_DIR, `${agent.id}.events`);
+  for (const f of [files.out, files.done, files.progress, violationPath, eventsPath, files.phase]) {
     try {
       unlinkSync(f);
     } catch {
@@ -273,23 +325,49 @@ export async function deliverResponse(
   output: string,
   liveMsgId: string | null,
   replyToId: string | null,
+  meta?: ResponseMeta | null,
 ): Promise<string | null> {
   const icon = getAgentIcon(agent);
   const maxLen = adapter.capabilities?.maxMessageLength || MAX_MSG_LEN;
-  const prefix = `${icon} [${agent.name}]:\n\n`;
-  const contPrefix = `${icon} [${agent.name}] ↓\n\n`;
-  const chunkBudget = maxLen - Math.max(prefix.length, contPrefix.length) - 10;
-  const chunks = splitMessage(output, chunkBudget);
+  const footer = meta ? buildResponseFooter(meta) : '';
+  const footerLen = footer.length;
+
+  // Build prefix helpers — chunk numbering computed after splitting
+  function makePrefix(chunkIdx: number, total: number): string {
+    const tag = total > 1 ? ` (${chunkIdx + 1}/${total})` : '';
+    return `${icon} ${agent.name}${tag}:\n\n`;
+  }
+
+  // Fence-healing may add up to ~20 chars per chunk (closing + re-opening ```)
+  const FENCE_HEAL_MARGIN = 30;
+
+  // First pass: split without footer to determine chunk count
+  const rawBudget = maxLen - makePrefix(0, 1).length - FENCE_HEAL_MARGIN;
+  const firstBudget = rawBudget - footerLen;
+  const rawChunks = splitMessage(output, Math.max(firstBudget, rawBudget - 80));
+
+  // Re-split if first chunk + footer would overflow
+  let chunks: string[];
+  if (rawChunks.length === 1 && (makePrefix(0, 1).length + rawChunks[0].length + footerLen) <= maxLen) {
+    chunks = rawChunks;
+  } else {
+    const adjustedBudget = maxLen - makePrefix(0, 2).length - footerLen - FENCE_HEAL_MARGIN;
+    chunks = splitMessage(output, Math.max(adjustedBudget, 200));
+  }
+
+  const total = chunks.length;
 
   let responseMsgId = liveMsgId;
 
   if (liveMsgId && adapter.capabilities?.finalMessageBehavior === 'send') {
-    // Telegram: close thinking bubble, send each chunk as a new message
-    await adapter.edit(liveMsgId, `${icon} [${agent.name}]: ✅`);
+    // Telegram: edit progress into a receipt, send response as new messages
+    const receipt = meta ? buildDoneReceipt(agent, meta) : `${icon} ${agent.name}: ✅`;
+    await adapter.edit(liveMsgId, receipt);
     let replyTarget = replyToId || liveMsgId;
-    for (let i = 0; i < chunks.length; i++) {
-      const p = i === 0 ? prefix : contPrefix;
-      const newMsgId = await adapter.send(p + chunks[i], replyTarget);
+    for (let i = 0; i < total; i++) {
+      const p = makePrefix(i, total);
+      const f = i === total - 1 ? footer : '';
+      const newMsgId = await adapter.send(p + chunks[i] + f, replyTarget);
       if (newMsgId) {
         if (i === 0) responseMsgId = newMsgId;
         setMsgAgent(newMsgId, agent.id);
@@ -299,16 +377,20 @@ export async function deliverResponse(
     saveState();
   } else if (liveMsgId) {
     // WhatsApp/Slack: first chunk edits the thinking message, rest sent as new
-    const edited = await adapter.edit(liveMsgId, prefix + chunks[0]);
+    const p0 = makePrefix(0, total);
+    const f0 = total === 1 ? footer : '';
+    const edited = await adapter.edit(liveMsgId, p0 + chunks[0] + f0);
     if (!edited) {
-      const newMsgId = await adapter.send(prefix + chunks[0]);
+      const newMsgId = await adapter.send(p0 + chunks[0] + f0);
       if (newMsgId) {
         responseMsgId = newMsgId;
         setMsgAgent(newMsgId, agent.id);
       }
     }
-    for (let i = 1; i < chunks.length; i++) {
-      const newMsgId = await adapter.send(contPrefix + chunks[i], responseMsgId);
+    for (let i = 1; i < total; i++) {
+      const p = makePrefix(i, total);
+      const f = i === total - 1 ? footer : '';
+      const newMsgId = await adapter.send(p + chunks[i] + f, responseMsgId);
       if (newMsgId) {
         responseMsgId = newMsgId;
         setMsgAgent(newMsgId, agent.id);
@@ -317,9 +399,10 @@ export async function deliverResponse(
     saveState();
   } else {
     // No live message — send all chunks fresh
-    for (let i = 0; i < chunks.length; i++) {
-      const p = i === 0 ? prefix : contPrefix;
-      const newMsgId = await adapter.send(p + chunks[i]);
+    for (let i = 0; i < total; i++) {
+      const p = makePrefix(i, total);
+      const f = i === total - 1 ? footer : '';
+      const newMsgId = await adapter.send(p + chunks[i] + f);
       if (newMsgId) {
         if (i === 0) responseMsgId = newMsgId;
         setMsgAgent(newMsgId, agent.id);
@@ -328,8 +411,8 @@ export async function deliverResponse(
     saveState();
   }
 
-  if (chunks.length > 1) {
-    console.log(`  📨 ${agent.name} response split into ${chunks.length} messages`);
+  if (total > 1) {
+    console.log(`  📨 ${agent.name} response split into ${total} messages`);
   }
   console.log(`  ✅ ${agent.name} responded`);
 
@@ -345,9 +428,15 @@ export interface ExecuteCallbacks {
     agent: Agent,
     output: string,
     exitCode: number,
-    extra: AgentRunFiles & { toolsUsed: string[]; lastProgress: string; violations: ViolationRecord[] },
+    extra: AgentRunFiles & {
+      toolsUsed: string[];
+      lastProgress: string;
+      violations: ViolationRecord[];
+      durationMs: number;
+      costUsd: number | null;
+    },
   ): Promise<void> | void;
-  onTimeout?(agent: Agent): Promise<void> | void;
+  onTimeout?(agent: Agent, extra: { durationMs: number; toolsUsed: string[]; lastProgress: string }): Promise<void> | void;
   onTmuxError?(agent: Agent, error: string): Promise<void> | void;
 }
 
@@ -405,6 +494,8 @@ export function executeAgentCommand(
   const startTime = Date.now();
   let lastProgress = '';
   let lastProgressHash = '';
+  let lastEventOffset = 0;
+  const eventsPath = path.join(TMP_DIR, `${agent.id}.events`);
 
   const poll = async (): Promise<void> => {
     if (isShuttingDown()) return;
@@ -480,11 +571,13 @@ export function executeAgentCommand(
         cwd: agent.cwd,
       });
 
-      // Record usage/cost data
+      // Record usage/cost data — capture costUsd for response metadata
+      let turnCostUsd: number | null = null;
       const usageFile = path.join(TMP_DIR, `${agent.id}.usage`);
       if (existsSync(usageFile)) {
         try {
           const usageData = JSON.parse(readFileSync(usageFile, 'utf8'));
+          turnCostUsd = usageData.costUsd ?? null;
           _usageTracker!.record(agent.id, agent.name, agent.backend, usageData);
           unlinkSync(usageFile);
           broadcastToWS({ type: 'usage_update', usage: _usageTracker!.getAll() });
@@ -493,11 +586,13 @@ export function executeAgentCommand(
         }
       }
 
+      const durationMs = Date.now() - startTime;
+
       _timeline!.emit('response', {
         agentId: agent.id,
         agentName: agent.name,
         backend: agent.backend,
-        meta: { chars: output.length, exitCode },
+        meta: { chars: output.length, exitCode, durationMs, costUsd: turnCostUsd },
       });
       saveState();
       broadcastAgents();
@@ -508,6 +603,8 @@ export function executeAgentCommand(
           toolsUsed,
           lastProgress,
           violations,
+          durationMs,
+          costUsd: turnCostUsd,
         });
       }
       return;
@@ -515,17 +612,20 @@ export function executeAgentCommand(
 
     // Check timeout
     if (Date.now() - startTime > timeout) {
+      const durationMs = Date.now() - startTime;
+      const toolsUsed = _historyManager!.extractToolsFromOutput(lastProgress || '');
       console.log(`  ⏰ Agent ${agent.name} timed out`);
       _timeline!.emit('timeout', {
         agentId: agent.id,
         agentName: agent.name,
         backend: agent.backend,
+        meta: { durationMs },
       });
       if (existsSync(files.runningFile)) unlinkSync(files.runningFile);
       _historyManager!.recordError(agent.id, 'timeout', 'Command timed out');
       broadcastAgents();
 
-      if (callbacks.onTimeout) await callbacks.onTimeout(agent);
+      if (callbacks.onTimeout) await callbacks.onTimeout(agent, { durationMs, toolsUsed, lastProgress });
       return;
     }
 
@@ -541,6 +641,33 @@ export function executeAgentCommand(
             if (callbacks.onProgress) await callbacks.onProgress(agent, progress);
           }
         }
+      } catch {
+        // ignore
+      }
+    }
+
+    // Read structured events (JSONL) and emit to timeline
+    if (existsSync(eventsPath)) {
+      try {
+        const eventsRaw = readFileSync(eventsPath, 'utf8');
+        const eventLines = eventsRaw.split('\n').filter(Boolean);
+        for (let i = lastEventOffset; i < eventLines.length; i++) {
+          try {
+            const evt = JSON.parse(eventLines[i]);
+            const typeMap: Record<string, string> = {
+              tool: 'tool_start', think: 'thinking', text: 'text_output',
+              error: 'agent_error', session: 'session_init',
+            };
+            const evtType = typeMap[evt.t] || 'tool_start';
+            _timeline!.emit(evtType as import('../types/index.js').TimelineEventType, {
+              agentId: agent.id,
+              agentName: agent.name,
+              backend: agent.backend,
+              meta: evt,
+            });
+          } catch { /* skip malformed line */ }
+        }
+        lastEventOffset = eventLines.length;
       } catch {
         // ignore
       }

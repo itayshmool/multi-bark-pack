@@ -335,18 +335,24 @@ export async function requestApproval(
     ? violation.args.substring(0, 117) + '...'
     : violation.args;
 
+  const timeoutMin = Math.round((_policy.approvalTimeout || 300_000) / 60_000);
+  const projectTag = agent.cwd ? `📂 ${path.basename(agent.cwd)} · ` : '';
+  const contextLine = `${projectTag}${agent.backend || 'unknown'} · ⏱ ${timeoutMin}m timeout`;
+
   let text: string;
   if (violation.action === 'block') {
     text =
-      `🚫 [${agent.name}] attempted a BLOCKED operation:\n` +
-      `\`${violation.tool}: ${cmdPreview}\`\n\n` +
-      `This violates policy. The operation already executed — review required.\n` +
-      `Reply *approve* to deliver the response, or *deny* to suppress it.`;
+      `🚫 ${agent.name} · BLOCKED operation\n\n` +
+      `🔧 ${violation.tool}: \`${cmdPreview}\`\n` +
+      `${contextLine}\n\n` +
+      `Policy violation — review required.\n` +
+      `Reply *approve* or *deny*`;
   } else {
     text =
-      `⚠️ [${agent.name}] ran an operation that requires approval:\n` +
-      `\`${violation.tool}: ${cmdPreview}\`\n\n` +
-      `Reply *approve* to deliver the response, or *deny* to suppress it.`;
+      `⏳ ${agent.name} · approval needed\n\n` +
+      `🔧 ${violation.tool}: \`${cmdPreview}\`\n` +
+      `${contextLine}\n\n` +
+      `Reply *approve* or *deny*`;
   }
 
   const approvalMsgId = await adapter.send(text, replyToId);
@@ -398,7 +404,7 @@ export async function resolveApproval(
     if (pending.heldLiveMsgId) {
       await adapter.edit(
         pending.heldLiveMsgId,
-        `🚫 [${agent.name}] operation denied: \`${pending.tool}\``,
+        `🚫 ${agent.name} · operation denied: \`${pending.tool}\``,
       );
     }
   }

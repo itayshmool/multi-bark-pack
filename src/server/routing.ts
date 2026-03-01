@@ -81,7 +81,7 @@ export async function onMessage(msg: NormalizedMessage): Promise<void> {
       console.log(`  🎤 Saved voice: ${downloaded.filePath}`);
 
       // Send "listening..." as reply — will be edited to "thinking..." after transcription
-      listeningMsgId = await adapter.send('🎤 _listening..._', msg.id);
+      listeningMsgId = await adapter.send('🎤 listening...', msg.id);
 
       const transcript = await transcribeAudio(downloaded.filePath);
       if (transcript) {

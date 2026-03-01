@@ -7,8 +7,6 @@ import { getAgents, getDeletedAgents, getMsgAgent, saveState } from './state.js'
 import { resolveApproval, loadPolicy, getPolicy } from './approval.js';
 import {
   findAgentByName,
-  findDeletedByName,
-  softDeleteAgent,
   hardDeleteAgent,
   spawnAgent,
   stopAgents,
@@ -17,14 +15,13 @@ import {
   rebornAgent,
   resetAgents,
 } from './agents.js';
-import { sanitizeName } from './naming.js';
+import { sanitizeName, getAgentIcon } from './naming.js';
 import { timeSince } from './status.js';
 import { updatePinnedStatus } from './status.js';
 import { parseMessageTags } from '../utils/tags.js';
 import { shellEscape } from '../utils/shell.js';
 import { runDaily } from './daily.js';
-import { EXEC_OPTS } from './config.js';
-import { exec, execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
 
 // Lazily injected dependencies
 let _backends: BackendsProvider | null = null;
@@ -81,10 +78,10 @@ export async function handleCommand(
         '`/reload-policy` — hot-reload bark-policy.json\n' +
         '`/purge` — delete all shelved pups\n' +
         '`/restart` `/shutdown` — server control\n' +
-        '_Use `pack` instead of name for all pups_\n\n' +
+        'Use `pack` instead of name for all pups\n\n' +
         '*Multi-LLM:*\n' +
         '`#claude-code` `#cursor` `#codex` `#gemini`\n' +
-        '`#haiku` `#sonnet` `#opus` _(models)_\n' +
+        '`#haiku` `#sonnet` `#opus` (models)\n' +
         'Example: `#cursor #opus fix this bug`\n\n' +
         '*Routing:*\n' +
         '`@name msg` — send to pup\n' +
@@ -93,7 +90,7 @@ export async function handleCommand(
         '*Delegation:*\n' +
         'Pups can spawn sub-agents via `bark delegate "task"`\n' +
         'Add `--branch` for isolated branch + PR\n\n' +
-        '_Dashboard: http://localhost:3333_',
+        '🖥 Dashboard: http://localhost:3333',
     );
     return true;
   }
@@ -159,7 +156,7 @@ export async function handleCommand(
       saveState();
       const skill = _skillsManager!.get(skillName)!;
       await adapter.send(
-        `⚡ Added \`${skillName}\` to *${agent.name}*\n_${skill.description}_\n\n_Skill will apply on next message (new session)._`,
+        `⚡ Added \`${skillName}\` to *${agent.name}*\n${skill.description}\n\nSkill will apply on next message (new session).`,
       );
       return true;
     }
@@ -168,7 +165,7 @@ export async function handleCommand(
     const skill = _skillsManager!.get(skillName)!;
     await adapter.send(
       `*${skill.name}*\n` +
-        `_${skill.description}_\n\n` +
+        `${skill.description}\n\n` +
         `Tokens: ~${skill.tokens}\n\n` +
         `Usage: \`/skill ${skillName} @pup\` to add to a pup`,
     );
@@ -181,7 +178,7 @@ export async function handleCommand(
       await adapter.send('No lost pups. All accounted for!');
       return true;
     }
-    const lines = [`💀 *Lost Pups* _${deletedAgents.size} shelved_\n`];
+    const lines = [`💀 *Lost Pups* (${deletedAgents.size} shelved)\n`];
     const sorted = [...deletedAgents.values()].sort(
       (a, b) =>
         new Date(b.deletedAt || 0).getTime() - new Date(a.deletedAt || 0).getTime(),
@@ -193,7 +190,7 @@ export async function handleCommand(
         : 'unknown';
       lines.push(`💀 *${agent.name}* — born ${age}, shelved ${died}`);
     }
-    lines.push(`\n_Use \`/reborn name\` to resurrect_`);
+    lines.push(`\nUse \`/reborn name\` to resurrect`);
     const msgText = lines.join('\n');
     await adapter.send(
       msgText.length > 4000 ? msgText.substring(0, 3950) + '...' : msgText,
@@ -235,8 +232,9 @@ export async function handleCommand(
       await adapter.send(result.error!);
       return true;
     }
+    const rebornIcon = getAgentIcon(result.agent!);
     await adapter.send(
-      `🐕 *${result.agent!.name}* is back! Session restored — send a message to pick up where you left off.`,
+      `${rebornIcon} *${result.agent!.name}* is back! Session restored — send a message to pick up where you left off.`,
     );
     return true;
   }
@@ -539,7 +537,7 @@ export async function handleCommand(
         return true;
       }
       await resolveApproval(agent, isApprove, adapter);
-      await adapter.send(`${isApprove ? '✅' : '🚫'} ${agent.name}: ${isApprove ? 'approved' : 'denied'}.`);
+      await adapter.send(`${isApprove ? '✅' : '🚫'} ${agent.name} · ${isApprove ? 'approved' : 'denied'}`);
       return true;
     }
 

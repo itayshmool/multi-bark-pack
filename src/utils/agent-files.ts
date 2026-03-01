@@ -16,5 +16,7 @@ export function getAgentFiles(agentId: string) {
     sh: path.join(TMP_DIR, `${agentId}.sh`),
     history: path.join(TMP_DIR, `${agentId}.history.json`),
     sendDir: path.join(TMP_DIR, `${agentId}-send`),
+    events: path.join(TMP_DIR, `${agentId}.events`),
+    phase: path.join(TMP_DIR, `${agentId}.phase`),
   };
 }

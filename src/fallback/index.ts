@@ -254,14 +254,14 @@ export function buildNotification(agent: Agent, result: FallbackResult, failure:
       return null;  // Silent
 
     case 'reset':
-      return `${icon} _${agent.name} context refreshed..._`;
+      return `${icon} ${agent.name} · context refreshed`;
 
     case 'switch':
-      return `🔀 _${agent.name} switched to ${result.newBackend}..._`;
+      return `🔀 ${agent.name} → ${result.newBackend}`;
 
     default:
       if (!result.success) {
-        return `❌ [${agent.name}] ${failure.message}. Reply to retry or use /reset.`;
+        return `❌ ${agent.name} · ${failure.message} — reply to retry or use /reset`;
       }
       return null;
   }

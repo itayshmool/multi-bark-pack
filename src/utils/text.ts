@@ -10,6 +10,9 @@ export function truncateMessage(text: string, maxLen: number): string {
  * Split a long message into chunks that fit within maxLen.
  * Splits at natural boundaries: paragraph > code fence > line > sentence > word.
  * Avoids splitting inside fenced code blocks when possible.
+ * When a code block is too large to avoid splitting, fence-healing closes the
+ * block at the split point and re-opens it in the next chunk so each chunk
+ * has properly paired ``` fences (critical for Telegram MarkdownV1).
  */
 export function splitMessage(text: string, maxLen: number): string[] {
   if (!text) return ['(no output)'];
@@ -32,7 +35,48 @@ export function splitMessage(text: string, maxLen: number): string[] {
     remaining = remaining.substring(splitAt).trimStart();
   }
 
-  return chunks.filter(c => c.length > 0);
+  return healFences(chunks.filter(c => c.length > 0));
+}
+
+/**
+ * Post-process chunks to ensure every chunk has properly paired ``` fences.
+ * When splitMessage is forced to split inside a code block, this closes the
+ * block at the end of the chunk and re-opens it at the start of the next one,
+ * preserving the language tag. This prevents Telegram MarkdownV1 parse failures.
+ */
+function healFences(chunks: string[]): string[] {
+  let inCode = false;
+  let langTag = '';
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (inCode) {
+      chunks[i] = '```' + langTag + '\n' + chunks[i];
+    }
+
+    let codeOpen = false;
+    let lastLang = '';
+    const fenceMatches = chunks[i].match(/^```(\w*)/gm) || [];
+    for (const m of fenceMatches) {
+      if (!codeOpen) {
+        codeOpen = true;
+        lastLang = m.slice(3);
+      } else {
+        codeOpen = false;
+        lastLang = '';
+      }
+    }
+
+    if (codeOpen) {
+      chunks[i] += '\n```';
+      inCode = true;
+      langTag = lastLang;
+    } else {
+      inCode = false;
+      langTag = '';
+    }
+  }
+
+  return chunks;
 }
 
 function findSplitPoint(segment: string, maxLen: number): number {

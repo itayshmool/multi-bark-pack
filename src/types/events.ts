@@ -14,7 +14,12 @@ export type TimelineEventType =
   | 'hard_delete'
   | 'reset'
   | 'security_block'
-  | 'server';
+  | 'server'
+  | 'tool_start'
+  | 'thinking'
+  | 'text_output'
+  | 'agent_error'
+  | 'session_init';
 
 export interface TimelineEvent {
   id: string;

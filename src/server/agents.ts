@@ -41,7 +41,10 @@ import {
   executeAgentCommand,
   formatAgentMessage,
   deliverResponse,
+  buildDoneReceipt,
+  formatDuration,
 } from './execution.js';
+import type { ResponseMeta } from './execution.js';
 import { requestApproval } from './approval.js';
 
 // Lazily injected dependencies
@@ -94,7 +97,7 @@ export async function spawnAgent(
 
   // Create tmux session with a bash shell for the agent to work in
   try {
-    createTmuxSession(tmuxSession, id, { startDir: REPO_PATH || undefined, echoName: name });
+    createTmuxSession(tmuxSession, id, { startDir: REPO_PATH || undefined, echoName: name, backendName: backend.name });
   } catch (e: unknown) {
     const msg = errorMessage(e);
     console.log(`  ⚠️ Could not create tmux session for ${name}: ${msg}`);
@@ -129,15 +132,14 @@ export async function spawnAgent(
   });
   await updatePinnedStatus();
 
-  // Send one message that will be edited through the whole lifecycle:
-  // "listening..." (voice) -> "thinking..." -> tool progress -> final response
   let liveMsgId: string | null;
   const icon = getAgentIcon(agent);
+  const thinkingMsg = `${icon} ${name} · ${backend.name}\n💭 thinking...`;
   if (reuseMsgId) {
     liveMsgId = reuseMsgId;
-    await adapter.edit(reuseMsgId, `${icon} [${name}]:\n_thinking..._`);
+    await adapter.edit(reuseMsgId, thinkingMsg);
   } else {
-    liveMsgId = await adapter.send(`${icon} [${name}]:\n_thinking..._`, replyToId);
+    liveMsgId = await adapter.send(thinkingMsg, replyToId);
   }
   // Map both the user's original message AND the pup's response to this agent.
   // This way, Slack thread replies (which point to the thread parent = user's msg) route correctly.
@@ -181,14 +183,14 @@ export async function sendToAgent(
     backend: agent.backend,
     meta: { preview: text.substring(0, 80) },
   });
-  // For follow-ups, send a thinking message that will be edited
   let liveMsgId: string | null;
   const icon = getAgentIcon(agent);
+  const thinkingMsg = `${icon} ${agent.name} · ${agent.backend}\n💭 thinking...`;
   if (reuseMsgId) {
     liveMsgId = reuseMsgId;
-    await adapter.edit(reuseMsgId, `${icon} [${agent.name}]:\n_thinking..._`);
+    await adapter.edit(reuseMsgId, thinkingMsg);
   } else {
-    liveMsgId = await adapter.send(`${icon} [${agent.name}]:\n_thinking..._`, replyToId);
+    liveMsgId = await adapter.send(thinkingMsg, replyToId);
   }
   if (replyToId) setMsgAgent(replyToId, agent.id);
   if (liveMsgId) setMsgAgent(liveMsgId, agent.id);
@@ -220,8 +222,16 @@ export function runAgentCommand(
       }
     },
 
-    async onComplete(agent: Agent, output: string, exitCode: number, { sendDir, toolsUsed, lastProgress, violations }) {
+    async onComplete(agent: Agent, output: string, exitCode: number, { sendDir, toolsUsed, lastProgress, violations, durationMs, costUsd }) {
       await updatePinnedStatus();
+
+      const meta: ResponseMeta = {
+        durationMs,
+        toolCount: toolsUsed.length,
+        costUsd,
+        backend: agent.backend,
+        exitCode,
+      };
 
       // Check for failure and trigger fallback
       const failure = _fallbackManager!.detector.classifyFailure(
@@ -258,13 +268,13 @@ export function runAgentCommand(
         return;
       }
 
-      // Deliver response — auto-chunks long output into multiple messages
       const responseMsgId = await deliverResponse(
         adapter,
         agent,
         output,
         liveMsgId,
         replyToId,
+        meta,
       );
 
       // Send any files the pup placed in its send directory
@@ -274,7 +284,7 @@ export function runAgentCommand(
           for (const file of files) {
             const filePath = path.join(sendDir, file);
             try {
-              const caption = `📎 [${agent.name}]: ${file}`;
+              const caption = `📎 ${agent.name}: ${file}`;
               await adapter.sendFile(filePath, caption, responseMsgId);
               console.log(`  📎 ${agent.name} sent file: ${file}`);
               _timeline!.emit('file_sent', {
@@ -299,15 +309,21 @@ export function runAgentCommand(
       }
     },
 
-    async onTimeout(agent: Agent) {
+    async onTimeout(agent: Agent, { durationMs, toolsUsed, lastProgress: lastProg }) {
       if (liveMsgId) {
-        await adapter.edit(liveMsgId, `⏰ [${agent.name}] timed out. Reply to retry.`);
+        const icon = getAgentIcon(agent);
+        const dur = formatDuration(durationMs);
+        const toolLine = toolsUsed.length > 0
+          ? `\n🔧 ${toolsUsed.length} tools · last: ${toolsUsed.slice(-3).join(' → ')}`
+          : '';
+        await adapter.edit(liveMsgId, `${icon} ${agent.name} ⏰ timed out · ${dur}${toolLine}\n💬 Reply to retry`);
       }
     },
 
     async onTmuxError(agent: Agent, error: string) {
+      const icon = getAgentIcon(agent);
       adapter
-        .send(`❌ [${agent.name}] tmux error: ${error.substring(0, 200)}`)
+        .send(`${icon} ${agent.name} ❌ tmux error: ${error.substring(0, 200)}`)
         .catch(() => {});
     },
   });

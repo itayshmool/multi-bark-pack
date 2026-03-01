@@ -31,6 +31,7 @@ export function createTmuxSession(
     startDir?: string;
     echoName?: string;
     echoSuffix?: string;
+    backendName?: string;
   } = {},
 ): void {
   const dir = opts.startDir || PROJECTS_DIR;
@@ -46,7 +47,7 @@ export function createTmuxSession(
       EXEC_OPTS,
     );
   }
-  setupTmuxEnv(tmuxSession, agentId);
+  setupTmuxEnv(tmuxSession, agentId, opts.backendName);
 }
 
 /** Ensure a tmux session exists for the agent, recreating it if necessary. */

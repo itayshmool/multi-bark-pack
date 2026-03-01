@@ -133,4 +133,42 @@ describe('splitMessage', () => {
     expect(chunks.length).toBe(3);
     expect(chunks).toEqual(['a', 'b', 'c']);
   });
+
+  it('heals fences when a huge code block forces mid-split', () => {
+    const code = '```typescript\n' + 'const x = 1;\n'.repeat(100) + '```';
+    const chunks = splitMessage(code, 400);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      const fences = (chunk.match(/^```/gm) || []).length;
+      expect(fences % 2).toBe(0);
+    }
+  });
+
+  it('preserves language tag when re-opening code block', () => {
+    const code = '```python\n' + 'x = 1\n'.repeat(100) + '```';
+    const chunks = splitMessage(code, 200);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Second chunk should re-open with the language tag
+    expect(chunks[1]).toMatch(/^```python/);
+  });
+
+  it('handles multiple code blocks where only one needs healing', () => {
+    const small = '```js\nconsole.log(1);\n```';
+    const huge = '```rust\n' + 'let x = 1;\n'.repeat(100) + '```';
+    const text = small + '\n\n' + huge;
+    const chunks = splitMessage(text, 500);
+    for (const chunk of chunks) {
+      const fences = (chunk.match(/^```/gm) || []).length;
+      expect(fences % 2).toBe(0);
+    }
+  });
+
+  it('does not alter chunks when all fences are already paired', () => {
+    const text = 'Before\n\n```js\ncode\n```\n\nAfter\n\n```py\nmore\n```';
+    const chunks = splitMessage(text, 30);
+    for (const chunk of chunks) {
+      const fences = (chunk.match(/^```/gm) || []).length;
+      expect(fences % 2).toBe(0);
+    }
+  });
 });

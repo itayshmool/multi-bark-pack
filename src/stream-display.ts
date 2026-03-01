@@ -21,6 +21,8 @@ const doneMarker = path.join(tmpDir, `${agentId}.done`);
 const sessionFile = path.join(tmpDir, `${agentId}.session`);
 const usageFile = path.join(tmpDir, `${agentId}.usage`);
 const violationFile = path.join(tmpDir, `${agentId}.violation`);
+const eventsFile = path.join(tmpDir, `${agentId}.events`);
+const phaseFile = path.join(tmpDir, `${agentId}.phase`);
 
 // --- State ---
 let fullText = '';
@@ -33,6 +35,69 @@ const MAX_PROGRESS_TEXT = 8 * 1024; // 8KB — only used for thinking preview
 // Tunable via env (set in the tmux session by the backend's buildCommand)
 const THROTTLE_MS = parseInt(process.env.STREAM_THROTTLE_MS || '800', 10);
 const THINKING_PREVIEW_LEN = parseInt(process.env.STREAM_THINKING_PREVIEW_LEN || '200', 10);
+// --- Structured events (JSONL) ---
+// Compact events emitted for the server to poll and broadcast via timeline/WebSocket
+interface StreamEvent {
+  t: 'tool' | 'think' | 'text' | 'error' | 'session';
+  ts: number;
+  e: number;
+  n?: string;
+  i?: string;
+  a?: string;
+  x?: string;
+}
+
+try { fs.unlinkSync(eventsFile); } catch { /* ignore */ }
+try { fs.unlinkSync(phaseFile); } catch { /* ignore */ }
+
+function appendEvent(evt: StreamEvent): void {
+  fs.appendFileSync(eventsFile, JSON.stringify(evt) + '\n');
+}
+
+function emitToolEvent(toolName: string, argsPreview?: string): void {
+  appendEvent({
+    t: 'tool', ts: Date.now(), e: Date.now() - startTime,
+    n: toolName, i: getToolIcon(toolName),
+    a: argsPreview ? argsPreview.substring(0, 200) : undefined,
+  });
+}
+
+let thinkBatchTimer: ReturnType<typeof setTimeout> | null = null;
+let thinkBatch = '';
+
+function emitThinkingBatched(text: string): void {
+  thinkBatch += text;
+  if (!thinkBatchTimer) {
+    thinkBatchTimer = setTimeout(() => {
+      if (thinkBatch) {
+        appendEvent({
+          t: 'think', ts: Date.now(), e: Date.now() - startTime,
+          x: thinkBatch.slice(-300),
+        });
+        thinkBatch = '';
+      }
+      thinkBatchTimer = null;
+    }, 2000);
+  }
+}
+
+// --- Phase detection from tool sequence ---
+const ANALYSIS_TOOLS = new Set(['Read', 'Grep', 'Glob', 'ListDir', 'Search', 'WebFetch']);
+const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
+const RUN_TOOLS = new Set(['Bash']);
+
+function detectPhase(): string {
+  if (tools.length === 0) return '🧠 Planning';
+  const last5 = tools.slice(-5);
+  const normalized = last5.map(normalizeToolName);
+  const analysisCount = normalized.filter(t => ANALYSIS_TOOLS.has(t)).length;
+  const writeCount = normalized.filter(t => WRITE_TOOLS.has(t)).length;
+  const runCount = normalized.filter(t => RUN_TOOLS.has(t)).length;
+  if (writeCount > 0 && writeCount >= analysisCount) return '✏️ Implementing';
+  if (runCount > 0 && normalized[normalized.length - 1] === 'Bash') return '💻 Running';
+  if (analysisCount > runCount + writeCount) return '🔍 Analyzing';
+  return '⚙️ Working';
+}
 
 // --- Tool name normalization (cross-backend) ---
 // Maps backend-specific tool names to canonical names used in policy rules.
@@ -113,28 +178,29 @@ function formatElapsed(): string {
 function buildStatus(): string {
   const lines: string[] = [];
   const elapsed = formatElapsed();
+  const phase = detectPhase();
 
-  // Tool chain with count
+  // Phase header
+  lines.push(phase);
+
+  // Tool chain with compact count
   if (tools.length > 0) {
     const recent = tools.slice(-5).map(t => `${getToolIcon(t)} ${t}`).join(' → ');
-    const countTag = tools.length > 5 ? ` (${tools.length} steps)` : '';
+    const countTag = tools.length > 5 ? ` (+${tools.length - 5})` : '';
     lines.push(recent + countTag);
   }
 
-  // Thinking preview (italic in WhatsApp: _text_)
+  // Thinking preview — 💭 prefix instead of _italic_ (underscores in code break Markdown)
   if (progressText) {
     let preview = progressText.slice(-THINKING_PREVIEW_LEN).trim();
     const firstSpace = preview.indexOf(' ');
     if (firstSpace > 0 && preview.length >= THINKING_PREVIEW_LEN) {
       preview = preview.substring(firstSpace + 1);
     }
-    lines.push(`_${preview.replace(/\n/g, ' ')}_`);
+    lines.push(`💭 ${preview.replace(/\n/g, ' ')}`);
   }
 
-  if (lines.length === 0) {
-    return `_thinking..._ ⏱ ${elapsed}`;
-  }
-
+  // Footer: elapsed only (backend already shown in message prefix by formatAgentMessage)
   lines.push(`⏱ ${elapsed}`);
   return lines.join('\n');
 }
@@ -145,7 +211,9 @@ function capBuffers(): void {
 }
 
 function writeProgress(): void {
-  fs.writeFileSync(progressFile, buildStatus());
+  const status = buildStatus();
+  fs.writeFileSync(progressFile, status);
+  fs.writeFileSync(phaseFile, detectPhase());
   lastWrite = Date.now();
 }
 
@@ -217,9 +285,10 @@ process.stdin.on('data', (chunk: string) => {
       if (data.type === 'stream_event') {
         const event = data.event;
 
-        // Thinking streaming (if available in future)
+        // Thinking streaming
         if (event?.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') {
           progressText += event.delta.thinking;
+          emitThinkingBatched(event.delta.thinking || '');
           process.stdout.write('\x1b[2m' + event.delta.thinking + '\x1b[0m'); // dim in tmux
         }
 
@@ -242,6 +311,7 @@ process.stdin.on('data', (chunk: string) => {
           currentToolName = toolName;
           currentToolInput = '';
           tools.push(toolName);
+          emitToolEvent(toolName);
           process.stdout.write(`\n${getToolIcon(toolName)} ${toolName}\n`);
           writeProgress();
         }
@@ -276,9 +346,9 @@ process.stdin.on('data', (chunk: string) => {
       // ═══════════════════════════════════════════════════════════
       if (data.type === 'thread.started') {
         process.stdout.write(`🧵 Session: ${data.thread_id}\n`);
-        // Write session ID to file for server to read
         if (data.thread_id) {
           fs.writeFileSync(sessionFile, data.thread_id);
+          appendEvent({ t: 'session', ts: Date.now(), e: Date.now() - startTime, x: data.thread_id });
         }
       }
 
@@ -288,6 +358,7 @@ process.stdin.on('data', (chunk: string) => {
         // Reasoning/thinking
         if (item.type === 'reasoning') {
           progressText += item.text || '';
+          emitThinkingBatched(item.text || '');
           process.stdout.write('\x1b[2m' + (item.text || '') + '\x1b[0m');
           writeProgress();
         }
@@ -303,6 +374,7 @@ process.stdin.on('data', (chunk: string) => {
         // Command execution (tool use)
         if (item.type === 'command_execution') {
           tools.push('Bash');
+          emitToolEvent('Bash', item.command);
           checkAndRecordViolation('Bash', item.command || '');
           process.stdout.write(`\n💻 Bash: ${item.command || ''}\n`);
           if (item.aggregated_output) {
@@ -330,8 +402,8 @@ process.stdin.on('data', (chunk: string) => {
       // ═══════════════════════════════════════════════════════════
       if (data.type === 'init' && data.session_id) {
         process.stdout.write(`🧵 Session: ${data.session_id}\n`);
-        // Write session ID to file for server to read
         fs.writeFileSync(sessionFile, data.session_id);
+        appendEvent({ t: 'session', ts: Date.now(), e: Date.now() - startTime, x: data.session_id });
       }
 
       if (data.type === 'message' && data.role === 'assistant') {
@@ -347,6 +419,7 @@ process.stdin.on('data', (chunk: string) => {
         const toolName = data.tool_name;
         tools.push(toolName);
         const argsStr = data.parameters ? JSON.stringify(data.parameters) : '';
+        emitToolEvent(toolName, argsStr);
         checkAndRecordViolation(toolName, argsStr);
         process.stdout.write(`\n${getToolIcon(toolName)} ${toolName}\n`);
         writeProgress();
@@ -374,14 +447,15 @@ process.stdin.on('data', (chunk: string) => {
       // ═══════════════════════════════════════════════════════════
       if (data.type === 'system' && data.subtype === 'init') {
         process.stdout.write(`🧵 Session: ${data.session_id}\n`);
-        // Write session ID to file for server to read
         if (data.session_id) {
           fs.writeFileSync(sessionFile, data.session_id);
+          appendEvent({ t: 'session', ts: Date.now(), e: Date.now() - startTime, x: data.session_id });
         }
       }
 
       if (data.type === 'thinking' && data.subtype === 'delta') {
         progressText += data.text || '';
+        emitThinkingBatched(data.text || '');
         process.stdout.write('\x1b[2m' + (data.text || '') + '\x1b[0m');
       }
 
@@ -407,6 +481,7 @@ process.stdin.on('data', (chunk: string) => {
           }
         }
         tools.push(toolName);
+        emitToolEvent(toolName, argsStr);
         checkAndRecordViolation(toolName, argsStr);
         process.stdout.write(`\n${getToolIcon(toolName)} ${toolName}\n`);
         writeProgress();
