@@ -13,7 +13,9 @@
     "dev": "tsx --watch src/server/index.ts",
     "start": "bash scripts/start.sh",
     "setup": "tsx src/setup/index.ts",
-    "test": "tsx src/test/run-all.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:legacy": "tsx src/test/run-all.ts",
     "test:phase1": "tsx src/test/run-all.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
@@ -43,6 +45,7 @@
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
   }
 }
