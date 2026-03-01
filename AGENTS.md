@@ -7,7 +7,7 @@ Multi-platform, multi-backend agent swarm. TypeScript + Node.js. Messages from W
 
 ## Project Snapshot
 
-- **Language:** TypeScript (ES2022, NodeNext modules) | 80 files, ~10,900 LOC
+- **Language:** TypeScript (ES2022, NodeNext modules) | 81 files, ~11,400 LOC
 - **Runtime:** Node.js >= 18
 - **Source:** `src/` → compiles to `dist/`
 - **Package manager:** yarn
@@ -32,7 +32,7 @@ src/
 ├── adapters/          3 files  Chat platforms: WhatsApp, Telegram, Slack
 ├── backends/          6 files  LLM CLIs: Claude Code, Cursor, Codex, Gemini + shared utils
 ├── stream-parsers/    5 files  JSON stream output parsers per backend
-├── types/            15 files  All TypeScript type definitions
+├── types/            16 files  All TypeScript type definitions
 ├── history/           3 files  Per-agent conversation tracking + rolling summaries
 ├── fallback/          4 files  Auto recovery: retry → reset → switch backend
 ├── security/          3 files  Optional LLM-based message threat screening

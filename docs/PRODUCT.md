@@ -7,7 +7,7 @@
 Send a message in WhatsApp, Telegram, or Slack. Get a coding agent ("pup") that:
 - Lives in a tmux session on your machine
 - Remembers its full conversation history
-- Can use multiple LLM backends (Claude, Cursor, Codex)
+- Can use multiple LLM backends (Claude, Cursor, Codex, Gemini)
 - Clones repos, writes code, runs tests, sends files back
 
 No context windows to manage. No copy-pasting. Just chat and code.
@@ -288,39 +288,45 @@ Web dashboard for pack visibility and control.
 Track token usage and costs (where available).
 
 **Deliverables:**
-- [ ] Parse usage data from Claude output
-- [ ] Track per-pup, per-session, per-day costs
-- [ ] `/cost` command to show breakdown
-- [ ] Cost in status message (optional)
-- [ ] Budget alerts (optional)
+- [x] Parse usage data from backend output (all backends via stream-display.ts → .usage files)
+- [x] Track per-pup, per-backend costs (`src/usage/` — storage, pricing, tracker)
+- [x] `/stats` command to show cost breakdown (per-backend, per-pup)
+- [x] `/stats name` for detailed per-pup stats
+- [x] Usage dashboard in Admin UI
+- [ ] Budget alerts (optional enhancement)
 
 **Success criteria:** Users can see how much they're spending
 
-**How to test:** Run pups, use `/cost` command, verify numbers match Claude's reported usage.
+**How to test:** Run pups, use `/stats` command, verify cost breakdown per backend and per pup. View usage dashboard in Admin UI.
 
-**Status:** Out of scope (last priority)
+**Status:** ✅ Complete (core features)
 
 ---
 
 ## Current Status
 
-**Phase:** 6 (Management UI) — Complete
-**Next:** Phase 7 (Cost & Usage Tracking) or additional UI enhancements
+**Phase:** 7 (Cost & Usage Tracking) — Complete
+**All core phases done.** Remaining work is optional enhancements.
 
 **Working:**
-- Backend abstraction layer
-- Claude Code backend (v2.1.9)
-- Cursor backend (v2026.01.23)
-- Codex backend (v0.104.0)
-- Gemini backend (v0.24.4)
-- All chat adapters (WA, TG, Slack)
-- Core commands
+- Backend abstraction layer (4 backends)
+- Claude Code, Cursor, Codex, Gemini backends
+- All chat adapters (WhatsApp, Telegram, Slack)
+- All core commands + `/stats` for usage
 - Backend selection via `#backend` tags
 - `/backends` capability matrix
 - Graceful degradation for missing capabilities
-- Management UI at `http://localhost:3000`
+- Management UI at `http://localhost:3333`
 - REST API for agent/backend data
 - WebSocket for live status updates
+- Cost & usage tracking per agent/backend
+- Agent fallback (retry → reset → switch backend)
+- Pup delegation (`bark delegate`)
+- Cross-backend skills system
+- Security guard (optional LLM screening)
+- Activity timeline (JSONL + ring buffer)
+- Server-side conversation history + rolling summaries
+- Interactive setup wizard (browser-based)
 
 **Tested:**
 - 44 automated tests passing
@@ -375,8 +381,8 @@ Track token usage and costs (where available).
    - Nice to have, not blocking
 
 4. **Fallback backends?**
-   - If Claude is overloaded, try Cursor?
-   - Complex, probably not worth it
+   - ✅ Implemented (`src/fallback/`). Automatic retry → reset → switch backend with context injection.
+   - Configurable via `FALLBACK_ENABLED`, `FALLBACK_BACKEND_PRIORITY` in `.env`
 
 ---
 
@@ -393,3 +399,4 @@ Track token usage and costs (where available).
 | 2024-02-21 | Phase 5a complete — Codex backend (OpenAI) |
 | 2024-02-21 | Phase 5b complete — Gemini backend (Google) |
 | 2024-02-21 | Phase 6 complete — Management UI (Express + WebSocket dashboard) |
+| 2024-02-21 | Phase 7 complete — Cost & Usage Tracking (per-agent, per-backend, /stats command) |

@@ -1,21 +1,36 @@
-# bark-pack Roadmap
+# multi-bark-pack Roadmap
 
 ## Done
 
 - **WhatsApp bridge** — receive/send messages via whatsapp-web.js, QR auth, persistent session
-- **Agent spawning** — each message spawns a `claude -p` process in a named tmux session
+- **Agent spawning** — each message spawns a backend CLI process in a named tmux session
 - **Agent registry** — `agents.json` tracks active/deleted agents with session IDs
 - **Message routing** — reply-to > @mention > new spawn, persisted across restarts
-- **Multi-agent** — up to 1,024 unique pup names (32 Paw Patrol × 32 adjectives)
-- **Soft-delete & reborn** — `/delete` preserves session; `/reborn` resumes with full history
-- **Pinned status** — auto-refreshing status message with pup list + git branch/files
+- **Multi-agent** — up to 1,024 unique pup names (32 names × 32 adjectives), switchable name packs
+- **Soft-delete & reborn** — `/clear` preserves session; `/reborn` resumes with full history
+- **Pinned status** — auto-refreshing status message with pup list + backend indicator
 - **Voice messages** — local transcription via whisper.cpp, no cloud API
 - **Telegram adapter** — full feature parity with WhatsApp (routing, status, commands, voice)
 - **Slack adapter** — Socket Mode, @mentions, thread routing, DM fallback, pin management
 - **Multi-owner filter** — comma-separated owner IDs per platform, `DANGER-ALL` wildcard
-- **Model selection** — `#haiku` / `#sonnet` / `#opus` tags switch Claude model per message
+- **Model selection** — `#haiku` / `#sonnet` / `#opus` tags switch model per pup
 - **Daily standup** — `/daily` collects a one-line status from every active pup
 - **Graceful shutdown** — `/shutdown` exits without auto-restart; `/restart` auto-restarts
+- **Multi-backend** — Claude Code, Cursor, Codex, Gemini with backend selection via `#backend` tags
+- **Backend abstraction** — unified interface (isInstalled, buildCommand, generateSessionId, capabilities)
+- **Stream parsers** — per-backend JSON stream parsing (claude, cursor, codex, gemini)
+- **REST API** — full CRUD for agents, backends, usage, timeline, packs (`/api/*` routes)
+- **Admin UI** — web dashboard with live agent status, chat panel, timeline, usage, name packs
+- **WebSocket** — real-time broadcasts (agent state, timeline events, messages, progress)
+- **Agent fallback** — automatic retry → reset → switch backend with context injection
+- **Pup delegation** — `bark delegate "task" [--branch]` for spawning sub-agents
+- **Cost & usage tracking** — per-agent, per-backend token/cost tracking, `/stats` command
+- **Conversation history** — server-side turn tracking + rolling summaries for context preservation
+- **Security guard** — optional LLM-based message threat screening (5 categories)
+- **Cross-backend skills** — reusable prompt modules (SKILL.md files, `/skill` command)
+- **Activity timeline** — JSONL storage + in-memory ring buffer for event logging
+- **API authentication** — optional token-based auth for API + WebSocket
+- **Setup wizard** — browser-based interactive setup (prerequisites, backends, adapters, .env)
 
 ## Planned
 
@@ -32,13 +47,6 @@ A persistent top-level agent that orchestrates others.
 - Can spawn sub-agents and delegate tasks
 - Sub-agents report to Commander; Commander reports to you
 
-### Agent Self-Spawning
-Agents can create child agents and receive their output.
-
-- Agents call a `spawn-child` tool to delegate sub-tasks
-- Children report back to parent when done
-- Parent summarises and replies to the original message
-
 ### Shared Tool Registry
 Agents register scripts they build so others can reuse them.
 
@@ -52,11 +60,3 @@ Currently macOS/Homebrew only. Planned:
 - Configurable binary paths (whisper-cli, ffmpeg)
 - Docker image for one-command deploy
 - systemd unit file for running as a service
-
-### REST API
-Control the pack via HTTP without being in the chat.
-
-- `POST /message` — send a message to an agent
-- `GET /agents` — list active agents
-- `POST /agents/:name/stop` — stop an agent
-- Helper functions (`stopAgents()`, `deleteAgents()`, `clearAgents()`) are already extracted and ready to wire up

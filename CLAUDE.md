@@ -27,7 +27,7 @@ Node.js, whatsapp-web.js, @slack/web-api, @slack/socket-mode, tmux, whisper.cpp 
 - `src/usage/` — Cost and token usage tracking per agent/backend
 - `src/timeline/` — Activity timeline (JSONL storage + in-memory ring buffer)
 - `src/skills/` — Cross-backend skill system (SKILL.md parser)
-- `src/config/` — Path constants, tool icon registry, MCP server config
+- `src/config/` — Path constants, tool icon registry
 - `src/utils/` — Shared utilities (error, tokens, text, tags, agent-files, atomic-write)
 - `src/setup/` — Interactive setup wizard modules
 - `src/types/` — All TypeScript type definitions
@@ -43,6 +43,7 @@ Node.js, whatsapp-web.js, @slack/web-api, @slack/socket-mode, tmux, whisper.cpp 
   - `ensure-server.sh` — Crontab-friendly script: ensures server is always running
   - `gather-cursor.sh` — Export Cursor CLI auth to a tarball (for migration)
   - `restore-cursor.sh` — Import Cursor CLI auth from a tarball
+  - `use-wix-registry.sh` — Swap yarn.lock for Wix internal npm registry
 - `agents.json` — Runtime state: active + soft-deleted agents (gitignored)
 - `routing.json` — Message ID → agent ID map, all platforms (gitignored)
 - `status.json` — Pinned status message IDs, persisted across restarts (gitignored)

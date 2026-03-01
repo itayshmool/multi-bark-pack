@@ -1,6 +1,6 @@
 # Architecture
 
-> 81 TypeScript files, ~11,000 LOC in `src/` | Node.js >= 18 | ES2022 + NodeNext modules
+> 81 TypeScript files, ~11,400 LOC in `src/` | Node.js >= 18 | ES2022 + NodeNext modules
 
 ## High-Level Architecture
 
