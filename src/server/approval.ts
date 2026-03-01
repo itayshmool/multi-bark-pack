@@ -23,6 +23,7 @@ import { updatePinnedStatus } from './status.js';
 import { broadcastAgents } from './websocket.js';
 
 const POLICY_FILE = path.join(ROOT_DIR, 'bark-policy.json');
+const POLICY_DEFAULT_FILE = path.join(ROOT_DIR, 'bark-policy.default.json');
 const AUDIT_LOG_FILE = path.join(TMP_DIR, 'approval.log');
 
 const DEFAULT_POLICY: ApprovalPolicy = {
@@ -66,6 +67,11 @@ export function loadPolicy(): void {
       const skipped = rawRules.length - validRules.length;
       const skippedMsg = skipped > 0 ? ` (${skipped} invalid rules skipped)` : '';
       console.log(`  🛡️ Loaded approval policy (${_policy.rules.length} rules, default: ${_policy.defaultAction})${skippedMsg}`);
+    } else if (fs.existsSync(POLICY_DEFAULT_FILE)) {
+      fs.copyFileSync(POLICY_DEFAULT_FILE, POLICY_FILE);
+      console.log('  🛡️ Created bark-policy.json from bark-policy.default.json (edit to customize)');
+      loadPolicy();
+      return;
     } else {
       _policy = { ...DEFAULT_POLICY };
       console.log('  🛡️ No bark-policy.json — using default policy (block)');
@@ -180,7 +186,7 @@ export function matchesBarkignore(filePath: string): boolean {
 export function getPolicyRulesForPrompt(): string | null {
   if (_policy.rules.length === 0 && _policy.barkignore.length === 0) return null;
 
-  const sections: string[] = ['## Approval Policy (MANDATORY)\n'];
+  const sections: string[] = ['<approval_policy mandatory="true">'];
 
   const approved: string[] = [];
   const needApproval: string[] = [];
@@ -195,64 +201,73 @@ export function getPolicyRulesForPrompt(): string | null {
 
   if (_policy.defaultAction === 'block') {
     sections.push(
-      'Default policy: **BLOCK**. Only operations explicitly listed below are allowed. ' +
-      'Everything else is FORBIDDEN — do not attempt unlisted operations.\n',
+      '<default_action>BLOCK — Only operations explicitly listed below are allowed. ' +
+      'Everything else is FORBIDDEN — do not attempt unlisted operations.</default_action>',
     );
   } else if (_policy.defaultAction === 'require_approval') {
     sections.push(
-      'Default policy: **REQUIRE APPROVAL**. Any operation not explicitly listed below requires you to ask the user first.\n',
+      '<default_action>REQUIRE APPROVAL — Any operation not explicitly listed below requires you to ask the user first.</default_action>',
+    );
+  } else {
+    sections.push(
+      '<default_action>AUTO APPROVE — Operations run without asking unless explicitly restricted below.</default_action>',
     );
   }
 
   if (approved.length > 0) {
     sections.push(
-      '### Auto-approved (safe to run without asking)\n' +
-      approved.map(r => `- ${r}`).join('\n'),
+      '<auto_approved>\n' +
+      'Safe to run without asking:\n' +
+      approved.map(r => `- ${r}`).join('\n') + '\n' +
+      '</auto_approved>',
     );
   }
 
   if (needApproval.length > 0) {
     sections.push(
-      '### Require approval — ASK BEFORE EXECUTING\n' +
+      '<require_approval>\n' +
       'You MUST follow this two-step flow for every operation below:\n' +
-      '1. **Propose** — describe the exact command you want to run and WHY\n' +
-      '2. **Wait** — do NOT execute until the user replies with approval (e.g. "yes", "approve", "go")\n\n' +
+      '1. Propose — describe the exact command you want to run and WHY\n' +
+      '2. Wait — do NOT execute until the user replies with approval (e.g. "yes", "approve", "go")\n\n' +
       'If the user says "no", "deny", or "stop" — abandon the operation and suggest alternatives.\n\n' +
       'Operations requiring approval:\n' +
       needApproval.map(r => `- ${r}`).join('\n') +
       '\n\n' +
-      'Example of CORRECT behavior:\n' +
-      '```\n' +
+      '<correct_example>\n' +
       'User: push the changes\n' +
       'You:  I\'d like to run `git push origin main` to push 3 commits. Shall I proceed?\n' +
       'User: yes\n' +
       'You:  [now executes git push]\n' +
-      '```\n\n' +
-      'Example of WRONG behavior (NEVER do this):\n' +
-      '```\n' +
+      '</correct_example>\n\n' +
+      '<wrong_example>\n' +
       'User: push the changes\n' +
       'You:  [immediately runs git push without asking]\n' +
-      '```',
+      '</wrong_example>\n' +
+      '</require_approval>',
     );
   }
 
   if (blocked.length > 0) {
     sections.push(
-      '### BLOCKED — NEVER execute these\n' +
-      'These operations are strictly forbidden. Do not run them under any circumstances, ' +
-      'even if the user asks. Explain that the operation is blocked by policy and suggest a safe alternative.\n\n' +
-      blocked.map(r => `- ${r}`).join('\n'),
+      '<blocked>\n' +
+      'NEVER execute these. Strictly forbidden under any circumstances, even if the user asks. ' +
+      'Explain that the operation is blocked by policy and suggest a safe alternative.\n\n' +
+      blocked.map(r => `- ${r}`).join('\n') + '\n' +
+      '</blocked>',
     );
   }
 
   if (_policy.barkignore.length > 0) {
     sections.push(
-      '### Protected files — NEVER access\n' +
-      'Do not read, write, edit, or include these files in commits. ' +
+      '<protected_files>\n' +
+      'NEVER read, write, edit, or include these files in commits. ' +
       'If asked to access them, refuse and explain they are protected by policy.\n\n' +
-      _policy.barkignore.map(p => `- \`${p}\``).join('\n'),
+      _policy.barkignore.map(p => `- ${p}`).join('\n') + '\n' +
+      '</protected_files>',
     );
   }
+
+  sections.push('</approval_policy>');
 
   return sections.join('\n\n');
 }

@@ -6,6 +6,7 @@ package-lock.json
 agents.json
 routing.json
 status.json
+bark-policy.json
 projects/
 .env
 .env.local

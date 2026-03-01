@@ -139,7 +139,8 @@ export function buildSkillPrompt(skillIds: string[]): string {
     return '';
   }
 
-  return '\n\n---\n\n' + parts.join('\n\n---\n\n');
+  const wrapped = parts.map((p, i) => `<skill index="${i + 1}">\n${p}\n</skill>`);
+  return `<skills>\n${wrapped.join('\n\n')}\n</skills>`;
 }
 
 /**

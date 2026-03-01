@@ -280,7 +280,7 @@ describe('approval module', () => {
       mod.initApproval({ getAgents: () => new Map(), getAdapters: () => [] });
 
       const prompt = mod.getPolicyRulesForPrompt();
-      expect(prompt).toContain('Approval Policy');
+      expect(prompt).toContain('<approval_policy');
       expect(prompt).toContain('BLOCK');
       expect(prompt).toContain('git push');
       expect(prompt).toContain('docker push');
@@ -304,11 +304,11 @@ describe('approval module', () => {
       mod.initApproval({ getAgents: () => new Map(), getAdapters: () => [] });
 
       const prompt = mod.getPolicyRulesForPrompt()!;
-      expect(prompt).toContain('ASK BEFORE EXECUTING');
+      expect(prompt).toContain('<require_approval>');
       expect(prompt).toContain('Propose');
       expect(prompt).toContain('Wait');
-      expect(prompt).toContain('CORRECT behavior');
-      expect(prompt).toContain('WRONG behavior');
+      expect(prompt).toContain('<correct_example>');
+      expect(prompt).toContain('<wrong_example>');
       expect(prompt).toContain('Shall I proceed');
     });
 
@@ -329,7 +329,7 @@ describe('approval module', () => {
       mod.initApproval({ getAgents: () => new Map(), getAdapters: () => [] });
 
       const prompt = mod.getPolicyRulesForPrompt()!;
-      expect(prompt).toContain('Auto-approved');
+      expect(prompt).toContain('<auto_approved>');
       expect(prompt).toContain('Read');
       expect(prompt).toContain('Grep');
     });
@@ -350,9 +350,9 @@ describe('approval module', () => {
       mod.initApproval({ getAgents: () => new Map(), getAdapters: () => [] });
 
       const prompt = mod.getPolicyRulesForPrompt()!;
-      expect(prompt).toContain('BLOCKED');
+      expect(prompt).toContain('<blocked>');
       expect(prompt).toContain('NEVER execute');
-      expect(prompt).toContain('strictly forbidden');
+      expect(prompt).toContain('Strictly forbidden');
       expect(prompt).toContain('docker push');
     });
 
@@ -370,8 +370,8 @@ describe('approval module', () => {
       mod.initApproval({ getAgents: () => new Map(), getAdapters: () => [] });
 
       const prompt = mod.getPolicyRulesForPrompt()!;
-      expect(prompt).toContain('Protected files');
-      expect(prompt).toContain('NEVER access');
+      expect(prompt).toContain('<protected_files>');
+      expect(prompt).toContain('NEVER read, write, edit');
       expect(prompt).toContain('.env');
       expect(prompt).toContain('*.key');
     });

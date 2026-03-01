@@ -44,7 +44,7 @@ Node.js, whatsapp-web.js, @slack/web-api, @slack/socket-mode, tmux, whisper.cpp 
   - `gather-cursor.sh` — Export Cursor CLI auth to a tarball (for migration)
   - `restore-cursor.sh` — Import Cursor CLI auth from a tarball
   - `use-wix-registry.sh` — Swap yarn.lock for Wix internal npm registry
-- `bark-policy.json` — Approval policy: rules, actions, barkignore (copy from `bark-policy.example.json`)
+- `bark-policy.json` — Approval policy: rules, actions, barkignore (copy from `bark-policy.default.json`)
 - `agents.json` — Runtime state: active + soft-deleted agents (gitignored)
 - `routing.json` — Message ID → agent ID map, all platforms (gitignored)
 - `status.json` — Pinned status message IDs, persisted across restarts (gitignored)
@@ -197,7 +197,7 @@ MAX_DELEGATION_DEPTH=1
 MAX_SUB_AGENTS=3
 
 # Approval Flow (see docs/APPROVAL.md)
-# Configure via bark-policy.json (copy bark-policy.example.json)
+# Configure via bark-policy.json (copy bark-policy.default.json)
 # Default action: block (all unconfigured tools are blocked)
 ```
 

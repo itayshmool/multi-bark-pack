@@ -6,7 +6,7 @@ Chat-native approval system for multi-bark-pack. Pups ask before executing dange
 
 1. Copy the example policy file:
    ```bash
-   cp bark-policy.example.json bark-policy.json
+   cp bark-policy.default.json bark-policy.json
    ```
 
 2. Edit `bark-policy.json` to match your needs (see [Configuration](#configuration) below).
@@ -327,8 +327,8 @@ The log is append-only and best-effort — write failures are silently ignored. 
 
 | File | Purpose |
 |------|---------|
-| `bark-policy.json` | Policy configuration (copy from `bark-policy.example.json`) |
-| `bark-policy.example.json` | Reference policy with all common rules pre-configured |
+| `bark-policy.json` | Policy configuration (copy from `bark-policy.default.json`) |
+| `bark-policy.default.json` | Reference policy with all common rules pre-configured |
 | `src/server/approval.ts` | Policy engine: load, validate, compile, evaluate, request/resolve approvals |
 | `src/types/approval.ts` | Type definitions: `ApprovalPolicy`, `ApprovalRequest`, `PolicyRule`, `ViolationRecord` |
 | `src/stream-display.ts` | Stream detector: tool name normalization, violation recording |
@@ -356,7 +356,7 @@ Or switch to the **balanced** preset (`"defaultAction": "require_approval"` -> `
 
 ### Pup is completely blocked and can't do anything
 
-Your rules are likely too restrictive. Make sure read-only tools and safe bash commands are explicitly `auto_approve`'d. The example config in `bark-policy.example.json` is a good starting point.
+Your rules are likely too restrictive. Make sure read-only tools and safe bash commands are explicitly `auto_approve`'d. The example config in `bark-policy.default.json` is a good starting point.
 
 ### Policy changes not taking effect
 
