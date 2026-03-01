@@ -60,7 +60,9 @@ yarn start --path=/path/to/repo    # Start with a specific repo
 yarn dev                           # Dev mode with tsx --watch
 yarn build                         # Compile TypeScript
 yarn typecheck                     # Type-check without emitting
-yarn test                          # Run tests
+yarn test                          # Run all Vitest tests (270 tests)
+yarn test:watch                    # Vitest in watch mode
+yarn test:legacy                   # Run legacy Phase 1 tests
 tmux ls                            # List active agent sessions
 tmux attach -t bark-Chase          # Watch a specific pup work
 ```

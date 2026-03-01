@@ -20,7 +20,9 @@ yarn build                # Compile TypeScript
 yarn start                # Start server (auto-restart wrapper)
 yarn dev                  # Dev mode with tsx --watch
 yarn typecheck            # Type-check without emitting
-yarn test                 # Run tests
+yarn test                 # Run Vitest tests (270 tests)
+yarn test:watch           # Vitest in watch mode
+yarn test:legacy          # Legacy Phase 1 tests
 yarn setup                # Interactive setup wizard
 ```
 
@@ -42,8 +44,10 @@ src/
 ├── config/            2 files  Path constants + tool icon registry
 ├── utils/             6 files  Shared: error, tokens, text, tags, agent-files, atomic-write
 ├── setup/             6 files  Interactive setup wizard (checks, backends, adapters, env)
-├── test/              3 files  Test infrastructure
+├── test/              3 files  Legacy test infrastructure (Phase 1)
 └── stream-display.ts  1 file   Standalone: backend output → .progress/.out/.done files
+Tests: 21 co-located *.test.ts files across src/ (Vitest)
+
 ```
 
 ### Other Directories
@@ -110,6 +114,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed flow diagrams.
 - **Text truncation:** Use `truncateMessage(text, max)` from `src/utils/text.ts`
 - **Storage:** Use `atomicWrite()` from `src/utils/atomic-write.ts` for JSON writes
 - **Backends:** Shared metadata in `BACKEND_METADATA` from `src/backends/shared.ts`
+- **Tests:** Co-located `*.test.ts` files using Vitest. Mock I/O with `vi.mock()`. Use `vi.hoisted()` for mock values referenced in `vi.mock` factories.
 
 ## Security & Secrets
 
@@ -120,5 +125,5 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed flow diagrams.
 ## Definition of Done
 
 ```bash
-yarn typecheck && yarn test
+yarn typecheck && yarn test && yarn build
 ```
