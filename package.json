@@ -1,16 +1,22 @@
 {
   "name": "multi-bark-pack",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Multi-platform, multi-backend AI agent swarm. Spawn persistent agents via WhatsApp, Telegram, or Slack.",
-  "main": "server.js",
+  "type": "module",
+  "main": "dist/server/index.js",
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "start": "bash start.sh",
-    "setup": "node setup-server.js",
-    "test": "node test/run-all.js",
-    "test:phase1": "node test/run-all.js"
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "dev": "tsx --watch src/server/index.ts",
+    "start": "bash scripts/start.sh",
+    "setup": "tsx src/setup/index.ts",
+    "test": "tsx src/test/run-all.ts",
+    "test:phase1": "tsx src/test/run-all.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
   },
   "keywords": [
     "claude",
@@ -31,5 +37,12 @@
     "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "^1.17.1",
     "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   }
 }

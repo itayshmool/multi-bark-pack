@@ -32,7 +32,7 @@ multi-bark-pack/
 │   ├── claude.js             # Claude stream-json parser
 │   ├── cursor.js             # Cursor stream-json parser
 │   └── generic.js            # Fallback text parser
-├── start.sh
+├── scripts/
 ├── package.json
 └── ...
 ```
