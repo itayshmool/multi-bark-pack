@@ -47,5 +47,24 @@ describe('auth', () => {
       const req = { headers: { authorization: 'Bearer wrong' } };
       expect(isAuthenticated(req as any)).toBe(false);
     });
+
+    it('accepts valid session token as cookie', () => {
+      const token = deriveSessionToken('my-secret-token');
+      const req = { headers: { cookie: `bark_token=${token}` } };
+      expect(isAuthenticated(req as any)).toBe(true);
+    });
+
+    it('rejects raw API_SECRET as cookie (must use derived token)', () => {
+      const req = { headers: { cookie: 'bark_token=my-secret-token' } };
+      expect(isAuthenticated(req as any)).toBe(false);
+    });
+
+    it('uses constant-time comparison (timingSafeEqual)', async () => {
+      // Verify the module uses crypto.timingSafeEqual, not ===
+      const authSource = await import('node:fs').then(fs =>
+        fs.readFileSync(new URL('./auth.ts', import.meta.url).pathname.replace('/dist/', '/src/'), 'utf8')
+      );
+      expect(authSource).toContain('timingSafeEqual');
+    });
   });
 });

@@ -24,19 +24,24 @@ export function parseCookie(req: Request, name: string): string | null {
   return match ? match.substring(name.length + 1) : null;
 }
 
+/** Constant-time string comparison to prevent timing attacks. */
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
 /** Check if a request is authenticated (cookie, bearer token, or query param). */
 export function isAuthenticated(req: Request | { headers?: Record<string, string | undefined> }): boolean {
   if (!API_SECRET) return true;
   const headers = req.headers as Record<string, string | undefined>;
   const bearer = headers?.authorization?.replace(/^Bearer\s+/i, '');
-  if (bearer === API_SECRET) return true;
-  if (bearer === SESSION_TOKEN) return true;
+  if (bearer && safeCompare(bearer, API_SECRET)) return true;
+  if (bearer && SESSION_TOKEN && safeCompare(bearer, SESSION_TOKEN)) return true;
   const cookie =
     typeof req === 'object' && headers
       ? parseCookie(req as Request, 'bark_token')
       : null;
-  if (cookie === SESSION_TOKEN) return true;
-  if (cookie === API_SECRET) return true;
+  if (cookie && SESSION_TOKEN && safeCompare(cookie, SESSION_TOKEN)) return true;
   return false;
 }
 
@@ -84,7 +89,8 @@ if (p.get('error')) document.getElementById('err').style.display = 'block';
     '/login',
     express.urlencoded({ extended: false }),
     (req: Request, res: Response) => {
-      if ((req.body as Record<string, string>)?.secret === API_SECRET) {
+      const submitted = (req.body as Record<string, string>)?.secret;
+      if (submitted && API_SECRET && safeCompare(submitted, API_SECRET)) {
         const host = req.headers.host || '';
         const isLocalhost = host.startsWith('localhost') || host.startsWith('127.0.0.1');
         res.cookie('bark_token', SESSION_TOKEN!, {

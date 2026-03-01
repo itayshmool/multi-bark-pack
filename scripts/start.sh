@@ -55,7 +55,14 @@ if [ ! -d "$BARK_DIR/node_modules" ]; then
     (cd "$BARK_DIR" && yarn install)
 fi
 
+NEEDS_BUILD=false
 if [ ! -d "$BARK_DIR/dist/server" ]; then
+    NEEDS_BUILD=true
+elif [ -n "$(find "$BARK_DIR/src" -name '*.ts' -newer "$BARK_DIR/dist/server" 2>/dev/null | head -1)" ]; then
+    NEEDS_BUILD=true
+fi
+
+if [ "$NEEDS_BUILD" = "true" ]; then
     echo -e "${YELLOW}Building TypeScript...${NC}"
     (cd "$BARK_DIR" && yarn build)
 fi

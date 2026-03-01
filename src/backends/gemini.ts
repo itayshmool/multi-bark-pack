@@ -5,7 +5,7 @@
 
 import type { Backend, BackendCapabilities, BuildCommandOpts, BuildCommandResult } from '../types/index.js';
 import { isCliInstalled, getCliVersion, BACKEND_METADATA } from './shared.js';
-import { sanitizePath } from './sanitize.js';
+import { sanitizePath, sanitizeModel } from './sanitize.js';
 
 const META = BACKEND_METADATA['gemini'];
 
@@ -57,15 +57,16 @@ export default function createGeminiBackend(_config: Record<string, unknown> = {
         cwd,
       } = opts;
 
-      const modelFlag = model ? `-m ${model}` : '';
+      const safeModel = model ? sanitizeModel(model) : null;
+      const modelFlag = safeModel ? `-m ${safeModel}` : '';
 
       const safeCwd = cwd ? sanitizePath(cwd) : null;
 
       let script = '#!/bin/bash\n';
       if (safeCwd) script += `cd "${safeCwd}"\n`;
-      // Pass through GEMINI_API_KEY if set in server environment
+      // Pass through GEMINI_API_KEY via single-quoted export (safe from shell expansion)
       if (process.env.GEMINI_API_KEY) {
-        script += `export GEMINI_API_KEY="${process.env.GEMINI_API_KEY}"\n`;
+        script += `export GEMINI_API_KEY='${process.env.GEMINI_API_KEY.replace(/'/g, "'\\''")}';\n`;
       }
 
       if (isResume && sessionId) {

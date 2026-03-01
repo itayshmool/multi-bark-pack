@@ -5,7 +5,7 @@
 
 import type { Backend, BackendCapabilities, BuildCommandOpts, BuildCommandResult } from '../types/index.js';
 import { isCliInstalled, getCliVersion, BACKEND_METADATA } from './shared.js';
-import { sanitizePath } from './sanitize.js';
+import { sanitizePath, sanitizeModel } from './sanitize.js';
 
 const META = BACKEND_METADATA['codex'];
 
@@ -57,7 +57,8 @@ export default function createCodexBackend(_config: Record<string, unknown> = {}
         cwd,
       } = opts;
 
-      const modelFlag = model && model !== 'default' ? `-m ${model}` : '';
+      const safeModel = model && model !== 'default' ? sanitizeModel(model) : null;
+      const modelFlag = safeModel ? `-m ${safeModel}` : '';
       const mcpFlag = mcpConfigFile ? `--mcp-config "${mcpConfigFile}"` : '';
 
       const safeCwd = cwd ? sanitizePath(cwd) : null;

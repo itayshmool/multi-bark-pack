@@ -7,7 +7,7 @@ import { execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import type { Backend, BackendCapabilities, BuildCommandOpts, BuildCommandResult } from '../types/index.js';
 import { isCliInstalled, getCliVersion, BACKEND_EXEC_OPTS, BACKEND_METADATA } from './shared.js';
-import { sanitizePath } from './sanitize.js';
+import { sanitizePath, sanitizeModel } from './sanitize.js';
 
 const META = BACKEND_METADATA['cursor'];
 
@@ -64,7 +64,8 @@ export default function createCursorBackend(_config: Record<string, unknown> = {
         cwd,
       } = opts;
 
-      const modelFlag = `--model ${model || this.defaultModel}`;
+      const safeModel = sanitizeModel(model || this.defaultModel) || this.defaultModel;
+      const modelFlag = `--model ${safeModel}`;
       const mcpFlag = mcpConfigFile ? `--mcp-config "${mcpConfigFile}"` : '';
 
       // Cursor uses --resume for both new and continued sessions

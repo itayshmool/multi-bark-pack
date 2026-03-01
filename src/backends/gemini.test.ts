@@ -84,10 +84,16 @@ describe('gemini backend', () => {
       expect(script).toContain('-m gemini-2.5-pro');
     });
 
-    it('exports GEMINI_API_KEY when set in env', () => {
-      process.env.GEMINI_API_KEY = 'test-key-123';
+    it('strips unsafe model values from command', () => {
+      const { script } = backend.buildCommand({ ...baseOpts, model: '; rm -rf /' });
+      expect(script).not.toContain('; rm -rf /');
+    });
+
+    it('exports GEMINI_API_KEY with single quotes (safe from shell expansion)', () => {
+      process.env.GEMINI_API_KEY = 'test-key-$pecial`chars';
       const { script } = backend.buildCommand(baseOpts);
-      expect(script).toContain('export GEMINI_API_KEY=');
+      expect(script).toContain("export GEMINI_API_KEY='test-key-$pecial`chars'");
+      expect(script).not.toContain('"test-key-');
     });
   });
 });

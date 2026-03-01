@@ -83,5 +83,10 @@ describe('cursor backend', () => {
       const { script } = backend.buildCommand(baseOpts);
       expect(script).toContain('--output-format stream-json');
     });
+
+    it('strips unsafe model values from command', () => {
+      const { script } = backend.buildCommand({ ...baseOpts, model: '`id`' });
+      expect(script).not.toContain('`id`');
+    });
   });
 });

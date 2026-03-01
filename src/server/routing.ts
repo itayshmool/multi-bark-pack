@@ -146,14 +146,14 @@ export async function onMessage(msg: NormalizedMessage): Promise<void> {
   // Prepend media context to body for all routes
   const fullBody = mediaContext + (body || 'Respond to the attached media.');
 
-  // --- Security Guard: screen message before routing ---
-  if (_securityGuard!.isEnabled()) {
-    const verdict = await _securityGuard!.screen(body || '');
+  // --- Security Guard: screen full message including media context ---
+  if (_securityGuard?.isEnabled()) {
+    const verdict = await _securityGuard.screen(fullBody);
     if (!verdict.allowed) {
       console.log(
         `  🛡️ BLOCKED [${verdict.category}]: "${(body || '').substring(0, 80)}" (${verdict.latencyMs}ms)`,
       );
-      _timeline!.emit('security_block', {
+      _timeline?.emit('security_block', {
         meta: { category: verdict.category, reason: verdict.reason },
       });
       await adapter.send(`🛡️ Message blocked: ${verdict.reason}`);

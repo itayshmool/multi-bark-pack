@@ -71,6 +71,7 @@ export function createWhatsAppAdapter({
 
       client.on('disconnected', (reason: string) => {
         console.log('WhatsApp disconnected:', reason);
+        groupChat = null;
       });
 
       return new Promise<void>((resolve) => {

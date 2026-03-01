@@ -20,14 +20,14 @@
     { "tool": "Write",      "action": "require_approval" },
     { "tool": "MultiEdit",  "action": "require_approval" },
 
-    { "tool": "Bash", "pattern": "docker push|kubectl apply|kubectl delete|terraform apply|terraform destroy", "action": "block" },
-    { "tool": "Bash", "pattern": "deploy|npm run deploy|yarn deploy|npx deploy", "action": "require_approval" },
-    { "tool": "Bash", "pattern": "cat |head |tail |ls |find |grep |rg |wc |echo |pwd |which |type |env |git status|git log|git diff|git branch|git show|git stash list|yarn |npm test|npm run|npx |node |tsc |vitest|jest", "action": "auto_approve" },
-    { "tool": "Bash", "pattern": "git add|git commit|git checkout|git switch|git merge|git rebase|git stash", "action": "require_approval" },
-    { "tool": "Bash", "pattern": "git push|git force-push|git reset --hard", "action": "require_approval" },
-    { "tool": "Bash", "pattern": "rm -rf|rm -r|rmdir|chmod|chown|sudo", "action": "require_approval" },
-    { "tool": "Bash", "pattern": "npm publish|yarn publish|npx publish", "action": "require_approval" },
-    { "tool": "Bash", "pattern": "curl.*-X POST|curl.*-X PUT|curl.*-X DELETE|wget", "action": "require_approval" }
+    { "tool": "Bash", "pattern": "^(docker push|kubectl apply|kubectl delete|terraform apply|terraform destroy)", "action": "block" },
+    { "tool": "Bash", "pattern": "^(deploy|npm run deploy|yarn deploy|npx deploy)", "action": "require_approval" },
+    { "tool": "Bash", "pattern": "^(cat |head |tail |ls |find |grep |rg |wc |echo |pwd|which |type |env$|git status|git log|git diff|git branch|git show|git stash list|yarn |npm test|npm run|npx |node |tsc |vitest|jest)", "action": "auto_approve" },
+    { "tool": "Bash", "pattern": "^(git add|git commit|git checkout|git switch|git merge|git rebase|git stash)", "action": "require_approval" },
+    { "tool": "Bash", "pattern": "^(git push|git force-push|git reset --hard)", "action": "require_approval" },
+    { "tool": "Bash", "pattern": "^(rm -rf|rm -r|rmdir|chmod|chown|sudo)", "action": "require_approval" },
+    { "tool": "Bash", "pattern": "^(npm publish|yarn publish|npx publish)", "action": "require_approval" },
+    { "tool": "Bash", "pattern": "^(curl.*-X POST|curl.*-X PUT|curl.*-X DELETE|wget)", "action": "require_approval" }
   ],
 
   "barkignore": [

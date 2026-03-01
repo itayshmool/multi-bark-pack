@@ -372,6 +372,33 @@ describe('routing - onMessage', () => {
       expect(mockSpawnAgent).not.toHaveBeenCalled();
     });
 
+    it('screens fullBody including mediaContext, not just body', async () => {
+      mockSecurityGuard.isEnabled.mockReturnValue(true);
+      mockSecurityGuard.screen.mockResolvedValueOnce({
+        allowed: true,
+        category: null,
+        reason: null,
+        latencyMs: 10,
+      });
+
+      const adapter = createMockAdapter({
+        downloadMedia: vi.fn(async () => ({ filePath: '/tmp/img.jpg', mimetype: 'image/jpeg' })),
+      });
+      const msg = createMockMessage({
+        adapter,
+        text: 'what is this',
+        hasMedia: true,
+        mediaType: 'image',
+      });
+
+      await onMessage(msg);
+
+      // The screened text should include the media context
+      const screenedText = (mockSecurityGuard.screen.mock.calls as any[][])[0][0];
+      expect(screenedText).toContain('[Image attached]');
+      expect(screenedText).toContain('what is this');
+    });
+
     it('allows message when security guard passes', async () => {
       mockSecurityGuard.isEnabled.mockReturnValue(true);
       mockSecurityGuard.screen.mockResolvedValueOnce({
@@ -385,6 +412,18 @@ describe('routing - onMessage', () => {
 
       await onMessage(msg);
 
+      expect(mockSpawnAgent).toHaveBeenCalled();
+    });
+  });
+
+  describe('null safety', () => {
+    it('does not crash when security guard is disabled and deps not initialized', async () => {
+      // Simulate a message when security guard is disabled (common case)
+      // The non-null assertions on _securityGuard! should not crash
+      mockSecurityGuard.isEnabled.mockReturnValue(false);
+      const msg = createMockMessage({ text: 'hello' });
+      // Should not throw
+      await onMessage(msg);
       expect(mockSpawnAgent).toHaveBeenCalled();
     });
   });

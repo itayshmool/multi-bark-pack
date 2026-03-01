@@ -84,5 +84,10 @@ describe('codex backend', () => {
       const { script } = backend.buildCommand({ ...baseOpts, model: 'o3' });
       expect(script).toContain('-m o3');
     });
+
+    it('strips unsafe model values from command', () => {
+      const { script } = backend.buildCommand({ ...baseOpts, model: '$(whoami)' });
+      expect(script).not.toContain('$(whoami)');
+    });
   });
 });

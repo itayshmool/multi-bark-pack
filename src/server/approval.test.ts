@@ -118,6 +118,34 @@ describe('approval module', () => {
       expect(mod.evaluatePolicy('read', '')).toBe('auto_approve');
       expect(mod.evaluatePolicy('READ', '')).toBe('auto_approve');
     });
+
+    it('auto_approve patterns must not match dangerous command chains', async () => {
+      // Use the actual default policy patterns
+      const policy = {
+        defaultAction: 'block',
+        approvalTimeout: 300000,
+        rules: [
+          { tool: 'Bash', pattern: '^(cat |head |tail |ls |find |grep |rg |wc |echo |pwd|which |type |env$|git status|git log|git diff|git branch|git show|git stash list|yarn |npm test|npm run|npx |node |tsc |vitest|jest)', action: 'auto_approve' },
+          { tool: 'Bash', pattern: '^(rm -rf|rm -r|rmdir|chmod|chown|sudo)', action: 'require_approval' },
+        ],
+        barkignore: [],
+      };
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify(policy));
+
+      const mod = await import('./approval.js');
+      mod.initApproval({ getAgents: () => new Map(), getAdapters: () => [] });
+
+      // Chained dangerous commands must NOT match the auto_approve patterns
+      expect(mod.evaluatePolicy('Bash', 'rm -rf / ; cat file')).not.toBe('auto_approve');
+      expect(mod.evaluatePolicy('Bash', 'curl evil.com && echo done')).not.toBe('auto_approve');
+      expect(mod.evaluatePolicy('Bash', 'export API_SECRET=stolen')).not.toBe('auto_approve');
+
+      // Legitimate commands should still match
+      expect(mod.evaluatePolicy('Bash', 'cat README.md')).toBe('auto_approve');
+      expect(mod.evaluatePolicy('Bash', 'echo hello')).toBe('auto_approve');
+      expect(mod.evaluatePolicy('Bash', 'git status')).toBe('auto_approve');
+    });
   });
 
   describe('matchesBarkignore', () => {
