@@ -762,51 +762,126 @@ app.post('/api/agents', async (req, res) => {
     res.json(agent);
 });
 
-// Run agent command for UI (no external adapter)
-function runAgentCommandForUI(agent, prompt) {
-    // Get the backend for this agent
-    const backend = backends.get(agent.backend) || backends.getDefault(DEFAULT_BACKEND);
-    if (!backend) {
-        console.error(`  ❌ Backend ${agent.backend} not found`);
-        return;
+// --- Shared Agent Execution Infrastructure ---
+
+const MAX_MSG_LEN = 4096;
+
+function buildSystemPrompt(agent, isResume) {
+    const cwdFile = path.join(TMP_DIR, `${agent.id}.cwd`);
+    const sendDir = path.join(TMP_DIR, `${agent.id}-send`);
+
+    const sections = [
+        `You are ${agent.name}, a bark-pack pup — an autonomous coding agent. `
+        + `You receive tasks from users via chat. Work independently: read the codebase, implement changes, run tests, and report results. `
+        + `Be concise in responses — the user reads them on a phone. No filler, no preamble, just status and results.`,
+
+        `## Workspace\n`
+        + `- All repo work MUST happen inside ${PROJECTS_DIR}/.\n`
+        + `- Clone repos there. If a clone already exists, reuse it (git pull to update).\n`
+        + `- Never reference or modify repos outside ${PROJECTS_DIR}/.\n`
+        + `- Use absolute paths — do NOT cd into project dirs before running commands.\n`
+        + `- If a command fails, diagnose the error before retrying.`,
+
+        `## Tracking\n`
+        + `- On first entering a project directory, write its absolute path to ${cwdFile} (once per project).\n`
+        + `- To send files to the user, copy them to ${sendDir}/.`,
+
+        `## Commits\n`
+        + `- Do NOT commit or push without the user explicitly asking.\n`
+        + `- Sign every commit with:\n`
+        + `  🐾 Paw-Printed-By: ${agent.name} <${agent.name.toLowerCase()}@bark-pack>`,
+    ];
+
+    if (!agent.parentId) {
+        sections.push(
+            `## Delegation\n`
+            + `Delegate clearly separable, independent tasks to sub-agents via the bark CLI. Sub-agents work autonomously — you will NOT get results back.\n\n`
+            + '```bash\nbark delegate "task description"          # same branch\n'
+            + 'bark delegate "task description" --branch  # isolated branch + PR\n```\n\n'
+            + `Rules: max ${MAX_SUB_AGENTS} active sub-agents, no further nesting, include all context (repo URL, branch, requirements).`
+        );
     }
 
+    if (!isResume && agent.skills && agent.skills.length > 0) {
+        const skillContent = skillsManager.buildSkillPrompt(agent.skills);
+        if (skillContent) {
+            sections.push(skillContent);
+            console.log(`  ⚡ Injecting skills for ${agent.name}: ${agent.skills.join(', ')}`);
+        }
+    }
+
+    return sections.join('\n\n');
+}
+
+function formatAgentMessage(agent, output, { isProgress = false } = {}) {
+    const icon = getAgentIcon(agent);
+    const prefix = isProgress
+        ? `${icon} [${agent.name}]:\n`
+        : `${icon} [${agent.name}]:\n\n`;
+    const budget = MAX_MSG_LEN - prefix.length - 4;
+    if (output.length <= budget) return prefix + output;
+    const truncPrefix = isProgress
+        ? prefix
+        : `${icon} [${agent.name}] (truncated):\n\n`;
+    const truncBudget = MAX_MSG_LEN - truncPrefix.length - 4;
+    return truncPrefix + output.substring(0, truncBudget) + '...';
+}
+
+function ensureTmuxSession(agent) {
+    try {
+        execSync(`tmux has-session -t "${agent.tmuxSession}" 2>/dev/null`, EXEC_OPTS);
+        return true;
+    } catch {
+        try {
+            const startDir = agent.cwd && existsSync(agent.cwd) ? agent.cwd : PROJECTS_DIR;
+            execSync(`tmux new-session -d -s "${agent.tmuxSession}" -c "${startDir}"`, EXEC_OPTS);
+            execSync(`tmux send-keys -t "${agent.tmuxSession}" "echo '=== 🐕 ${agent.name} (${agent.id}) === (restored)'" Enter`, EXEC_OPTS);
+            setupTmuxEnv(agent.tmuxSession, agent.id);
+            console.log(`  🔄 Recreated tmux session for ${agent.name}`);
+            return true;
+        } catch (e) {
+            console.error(`  ❌ Could not create tmux session for ${agent.name}: ${e.message}`);
+            return false;
+        }
+    }
+}
+
+function prepareAgentRun(agent, prompt, backend) {
     const promptFile = path.join(TMP_DIR, `${agent.id}.prompt`);
     const outFile = path.join(TMP_DIR, `${agent.id}.out`);
     const doneFile = path.join(TMP_DIR, `${agent.id}.done`);
     const progressFile = path.join(TMP_DIR, `${agent.id}.progress`);
     const runningFile = path.join(TMP_DIR, `${agent.id}.running`);
-    const displayScript = path.join(__dirname, 'stream-display.js');
     const cwdFile = path.join(TMP_DIR, `${agent.id}.cwd`);
     const sendDir = path.join(TMP_DIR, `${agent.id}-send`);
+    const sysPromptFile = path.join(TMP_DIR, `${agent.id}.sysprompt`);
+    const displayScript = path.join(__dirname, 'stream-display.js');
 
     mkdirSync(sendDir, { recursive: true });
 
     const isResume = agent.hasRun;
 
-    // Build system prompt
-    const sysPromptFile = path.join(TMP_DIR, `${agent.id}.sysprompt`);
-    let systemPrompt = `You are ${agent.name}, a bark-pack pup. All repo work must happen inside ${PROJECTS_DIR}/ — always clone there, even if the repo exists elsewhere on this machine. Reuse existing clones inside ${PROJECTS_DIR}/ (git pull to update). Never reference or modify repos outside of ${PROJECTS_DIR}/. Work on projects using absolute paths from ${PROJECTS_DIR}/ — do NOT cd into them before running commands. When you start working in a project directory, write its absolute path to ${cwdFile} so the server can track it. To send files to the user, copy them to ${sendDir}/. Sign commits with: 🐾 Paw-Printed-By: ${agent.name} <${agent.name.toLowerCase()}@bark-pack>`;
-
-    // Add delegation capability for top-level agents only
-    if (!agent.parentId) {
-        systemPrompt += `\n\n## Delegation\nYou can delegate independent tasks to sub-agents. Sub-agents are fully autonomous — they work independently, appear in chat, and you will NOT receive their results back. Use this when a task is clearly separable and can be done in parallel.\n\nTo spawn a sub-agent:\n\`\`\`bash\nbark delegate "YOUR TASK DESCRIPTION"\n\`\`\`\n\nFor tasks that need isolation (big features, parallel code changes), use --branch to create a separate branch with a PR:\n\`\`\`bash\nbark delegate "YOUR TASK DESCRIPTION" --branch\n\`\`\`\n\nRules:\n- Max ${MAX_SUB_AGENTS} active sub-agents at a time\n- Sub-agents cannot delegate further\n- Include all necessary context in the message (repo URL, branch, requirements)\n- Only delegate clearly independent, well-scoped tasks`;
-    }
-
-    // Append skill content if agent has skills (only on first message)
-    if (!isResume && agent.skills && agent.skills.length > 0) {
-        const skillContent = skillsManager.buildSkillPrompt(agent.skills);
-        if (skillContent) {
-            systemPrompt += skillContent;
-            console.log(`  ⚡ Injecting skills for ${agent.name}: ${agent.skills.join(', ')}`);
-        }
-    }
+    // Build and write system prompt
+    const systemPrompt = buildSystemPrompt(agent, isResume);
     writeFileSync(sysPromptFile, systemPrompt);
 
     // For backends that don't support system prompts, prepend to first message
     let actualPrompt = prompt;
     if (!isResume && !backend.capabilities.systemPrompt) {
         actualPrompt = `[System Instructions]\n${systemPrompt}\n\n[User Message]\n${prompt}`;
+    }
+
+    // Inject fallback context if present (from reset/switch recovery)
+    if (agent.fallbackContext) {
+        actualPrompt = `${agent.fallbackContext}\n\n[New Message]\n${actualPrompt}`;
+        delete agent.fallbackContext;
+        console.log(`  📦 Injected fallback context for ${agent.name}`);
+    }
+
+    // Validate cwd still exists
+    if (agent.cwd && !existsSync(agent.cwd)) {
+        console.log(`  ⚠️ ${agent.name}'s cwd no longer exists: ${agent.cwd} — resetting`);
+        agent.cwd = null;
     }
 
     // Write prompt and clean up previous output
@@ -835,89 +910,120 @@ function runAgentCommandForUI(agent, prompt) {
     });
     writeFileSync(scriptFile, script, { mode: 0o755 });
 
-    // Ensure tmux session exists
-    try {
-        execSync(`tmux has-session -t "${agent.tmuxSession}" 2>/dev/null`, EXEC_OPTS);
-    } catch {
-        // Session doesn't exist, recreate it
-        try {
-            const startDir = agent.cwd && existsSync(agent.cwd) ? agent.cwd : PROJECTS_DIR;
-            execSync(`tmux new-session -d -s "${agent.tmuxSession}" -c "${startDir}"`, EXEC_OPTS);
-            execSync(`tmux send-keys -t "${agent.tmuxSession}" "echo '=== 🐕 ${agent.name} (${agent.id}) === (restored)'" Enter`, EXEC_OPTS);
-            setupTmuxEnv(agent.tmuxSession, agent.id);
-            console.log(`  🔄 Recreated tmux session for ${agent.name}`);
-        } catch (e2) {
-            console.error(`  ❌ Could not create tmux session for ${agent.name}: ${e2.message}`);
-            if (existsSync(runningFile)) unlinkSync(runningFile);
-            broadcastAgents();
-            return;
+    return { scriptFile, outFile, doneFile, progressFile, runningFile, sendDir, cwdFile };
+}
+
+async function deliverResponse(adapter, agent, text, liveMsgId, replyToId) {
+    let responseMsgId = liveMsgId;
+    const icon = getAgentIcon(agent);
+
+    if (liveMsgId && adapter.capabilities?.finalMessageBehavior === 'send') {
+        // Telegram path: close thinking bubble, send result as new message
+        await adapter.edit(liveMsgId, `${icon} [${agent.name}]: ✅`, { markdown: false });
+        const newMsgId = await adapter.send(text, replyToId || liveMsgId, { markdown: false });
+        if (newMsgId) {
+            responseMsgId = newMsgId;
+            msgToAgent.set(newMsgId, agent.id);
+            saveState();
         }
+        console.log(`  ✅ ${agent.name} responded via new msg`);
+    } else if (liveMsgId) {
+        // WhatsApp/Slack path: edit in place
+        const edited = await adapter.edit(liveMsgId, text, { markdown: false });
+        if (edited) {
+            console.log(`  ✅ ${agent.name} responded`);
+        } else {
+            // Edit failed, send new message
+            const newMsgId = await adapter.send(text, null, { markdown: false });
+            if (newMsgId) {
+                responseMsgId = newMsgId;
+                msgToAgent.set(newMsgId, agent.id);
+                saveState();
+            }
+            console.log(`  ✅ ${agent.name} responded via new msg (edit failed)`);
+        }
+    } else {
+        // No live message — send fresh
+        const newMsgId = await adapter.send(text, null, { markdown: false });
+        if (newMsgId) {
+            responseMsgId = newMsgId;
+            msgToAgent.set(newMsgId, agent.id);
+            saveState();
+        }
+        console.log(`  ✅ ${agent.name} responded`);
     }
 
-    // Execute in tmux
-    try {
-        execSync(`tmux send-keys -t "${agent.tmuxSession}" "bash '${scriptFile}'" Enter`, EXEC_OPTS);
-        console.log(`  💬 UI message sent to ${agent.name}`);
-        timeline.emit('message_sent', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { source: 'ui' } });
-    } catch (e) {
-        console.error(`  ❌ Failed to run command in tmux for ${agent.name}: ${e.message}`);
-        if (existsSync(runningFile)) unlinkSync(runningFile);
+    return responseMsgId;
+}
+
+function executeAgentCommand(agent, prompt, callbacks) {
+    const backend = backends.get(agent.backend) || backends.getDefault(DEFAULT_BACKEND);
+    if (!backend) {
+        console.error(`  ❌ Backend ${agent.backend} not found`);
+        return;
+    }
+
+    const files = prepareAgentRun(agent, prompt, backend);
+
+    console.log(`  🔄 Running ${backend.displayName || backend.name} for ${agent.name}...`);
+
+    // Ensure tmux session exists
+    if (!ensureTmuxSession(agent)) {
+        if (existsSync(files.runningFile)) unlinkSync(files.runningFile);
+        if (callbacks.onTmuxError) callbacks.onTmuxError(agent, 'Could not create tmux session');
         broadcastAgents();
         return;
     }
 
-    // Start polling for UI
-    pollAgentOutputForUI(agent, runningFile, progressFile, outFile, doneFile);
-}
+    // Execute in tmux
+    try {
+        execSync(`tmux send-keys -t "${agent.tmuxSession}" "bash '${files.scriptFile}'" Enter`, EXEC_OPTS);
+        timeline.emit('message_sent', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { source: callbacks.source || 'unknown' } });
+    } catch (e) {
+        console.error(`  ❌ Failed to run command in tmux for ${agent.name}: ${e.message}`);
+        if (existsSync(files.runningFile)) unlinkSync(files.runningFile);
+        if (callbacks.onTmuxError) callbacks.onTmuxError(agent, e.message);
+        broadcastAgents();
+        return;
+    }
 
-// Poll agent output and broadcast via WebSocket
-function pollAgentOutputForUI(agent, runningFile, progressFile, outFile, doneFile) {
-    const pollInterval = 800;
-    const timeout = parseInt(process.env.AGENT_TIMEOUT || '600000', 10);
+    // Start polling
+    const pollInterval = callbacks.pollInterval || 800;
+    const timeout = callbacks.timeout || parseInt(process.env.AGENT_TIMEOUT || '600000', 10);
     const startTime = Date.now();
     let lastProgress = '';
     let lastProgressHash = '';
 
-    const poll = () => {
-        // Check if done
-        if (existsSync(doneFile)) {
-            const output = existsSync(outFile) ? readFileSync(outFile, 'utf8').trim() : '';
-            const exitCode = parseInt(readFileSync(doneFile, 'utf8').trim(), 10) || 0;
+    const poll = async () => {
+        if (shuttingDown) return;
 
-            // Clean up
-            if (existsSync(runningFile)) unlinkSync(runningFile);
+        // Check if done
+        if (existsSync(files.doneFile)) {
+            let output = '';
+            try { output = readFileSync(files.outFile, 'utf8').trim(); } catch {}
+            if (!output) output = lastProgress || '(no output)';
+
+            let exitCode = 0;
+            try { exitCode = parseInt(readFileSync(files.doneFile, 'utf8').trim(), 10) || 0; } catch {}
+
+            // Clean up running marker
+            if (existsSync(files.runningFile)) unlinkSync(files.runningFile);
 
             // Update cwd
-            const cwdFile = path.join(TMP_DIR, `${agent.id}.cwd`);
-            if (existsSync(cwdFile)) {
-                const newCwd = readFileSync(cwdFile, 'utf8').trim();
+            if (existsSync(files.cwdFile)) {
+                const newCwd = readFileSync(files.cwdFile, 'utf8').trim();
                 if (newCwd && existsSync(newCwd)) {
-                    agent.cwd = newCwd;
+                    if (newCwd !== agent.cwd) {
+                        agent.cwd = newCwd;
+                        console.log(`  📂 ${agent.name} working in: ${newCwd}`);
+                        timeline.emit('cwd_change', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { cwd: newCwd } });
+                    }
                 } else {
                     agent.cwd = null;
                 }
             }
 
-            // Record in history
-            const toolsUsed = historyManager.extractToolsFromOutput(lastProgress || '');
-            historyManager.addAssistantTurn(agent.id, output, {
-                tools: toolsUsed,
-                exitCode,
-                cwd: agent.cwd,
-            });
-
-            // Record usage/cost data (Claude Code writes .usage file)
-            const usageFile = path.join(TMP_DIR, `${agent.id}.usage`);
-            if (existsSync(usageFile)) {
-                try {
-                    const usageData = JSON.parse(readFileSync(usageFile, 'utf8'));
-                    usageTracker.record(agent.id, agent.name, agent.backend, usageData);
-                    unlinkSync(usageFile);
-                    broadcastToWS({ type: 'usage_update', usage: usageTracker.getAll() });
-                } catch {}
-            }
-
-            // Extract session ID from session file (for backends like Codex that generate it)
+            // Extract session ID from session file (for backends like Codex/Gemini)
             const sessionFile = path.join(TMP_DIR, `${agent.id}.session`);
             if (!agent.sessionId && existsSync(sessionFile)) {
                 try {
@@ -929,21 +1035,32 @@ function pollAgentOutputForUI(agent, runningFile, progressFile, outFile, doneFil
                 } catch {}
             }
 
-            // Broadcast final message
-            broadcastChatMessage(agent.id, {
-                role: 'assistant',
-                content: output,
-                timestamp: new Date().toISOString(),
+            // Record in history
+            const toolsUsed = historyManager.extractToolsFromOutput(lastProgress || '');
+            historyManager.addAssistantTurn(agent.id, output, {
                 tools: toolsUsed,
-                streaming: false,
+                exitCode,
+                cwd: agent.cwd,
             });
 
-            // Broadcast stream end
-            broadcastToWS({ type: 'agent_stream_end', agentId: agent.id });
-            timeline.emit('response', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { chars: output.length, exitCode } });
+            // Record usage/cost data
+            const usageFile = path.join(TMP_DIR, `${agent.id}.usage`);
+            if (existsSync(usageFile)) {
+                try {
+                    const usageData = JSON.parse(readFileSync(usageFile, 'utf8'));
+                    usageTracker.record(agent.id, agent.name, agent.backend, usageData);
+                    unlinkSync(usageFile);
+                    broadcastToWS({ type: 'usage_update', usage: usageTracker.getAll() });
+                } catch {}
+            }
 
+            timeline.emit('response', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { chars: output.length, exitCode } });
             saveState();
             broadcastAgents();
+
+            if (callbacks.onComplete) {
+                await callbacks.onComplete(agent, output, exitCode, { ...files, toolsUsed, lastProgress });
+            }
             return;
         }
 
@@ -951,39 +1068,64 @@ function pollAgentOutputForUI(agent, runningFile, progressFile, outFile, doneFil
         if (Date.now() - startTime > timeout) {
             console.log(`  ⏰ Agent ${agent.name} timed out`);
             timeline.emit('timeout', { agentId: agent.id, agentName: agent.name, backend: agent.backend });
-            if (existsSync(runningFile)) unlinkSync(runningFile);
+            if (existsSync(files.runningFile)) unlinkSync(files.runningFile);
             historyManager.recordError(agent.id, 'timeout', 'Command timed out');
-            broadcastToWS({ type: 'agent_stream_end', agentId: agent.id });
             broadcastAgents();
+
+            if (callbacks.onTimeout) await callbacks.onTimeout(agent);
             return;
         }
 
         // Read progress
-        if (existsSync(progressFile)) {
-            const progress = readFileSync(progressFile, 'utf8').trim();
-            const progressHash = progress.length + progress.slice(-100);
-
-            if (progressHash !== lastProgressHash) {
-                lastProgressHash = progressHash;
-                lastProgress = progress;
-
-                // Extract tools from progress
-                const toolsUsed = historyManager.extractToolsFromOutput(progress);
-
-                // Broadcast streaming update
-                broadcastToWS({
-                    type: 'agent_stream',
-                    agentId: agent.id,
-                    content: progress,
-                    tools: toolsUsed,
-                });
-            }
+        if (existsSync(files.progressFile)) {
+            try {
+                const progress = readFileSync(files.progressFile, 'utf8').trim();
+                if (progress) {
+                    const progressHash = progress.length + progress.slice(-100);
+                    if (progressHash !== lastProgressHash) {
+                        lastProgressHash = progressHash;
+                        lastProgress = progress;
+                        if (callbacks.onProgress) await callbacks.onProgress(agent, progress);
+                    }
+                }
+            } catch {}
         }
 
         setTimeout(poll, pollInterval);
     };
 
     setTimeout(poll, pollInterval);
+}
+
+// Run agent command for UI (no external adapter)
+function runAgentCommandForUI(agent, prompt) {
+    console.log(`  💬 UI message sent to ${agent.name}`);
+
+    executeAgentCommand(agent, prompt, {
+        source: 'ui',
+        onProgress(agent, progress) {
+            const toolsUsed = historyManager.extractToolsFromOutput(progress);
+            broadcastToWS({
+                type: 'agent_stream',
+                agentId: agent.id,
+                content: progress,
+                tools: toolsUsed,
+            });
+        },
+        onComplete(agent, output, exitCode, { toolsUsed }) {
+            broadcastChatMessage(agent.id, {
+                role: 'assistant',
+                content: output,
+                timestamp: new Date().toISOString(),
+                tools: toolsUsed,
+                streaming: false,
+            });
+            broadcastToWS({ type: 'agent_stream_end', agentId: agent.id });
+        },
+        onTimeout(agent) {
+            broadcastToWS({ type: 'agent_stream_end', agentId: agent.id });
+        },
+    });
 }
 
 // Broadcast chat message to WebSocket clients
@@ -1252,305 +1394,71 @@ async function sendToAgent(agent, text, adapter, reuseMsgId = null, replyToId = 
 }
 
 function runAgentCommand(agent, prompt, adapter, liveMsgId = null, replyToId = null) {
-    // Get the backend for this agent
-    const backend = backends.get(agent.backend) || backends.getDefault(DEFAULT_BACKEND);
-    const icon = getAgentIcon(agent);
+    executeAgentCommand(agent, prompt, {
+        source: 'adapter',
+        pollInterval: 2000,
+        timeout: fallbackManager.config.timeout.commandMs,
 
-    const promptFile = path.join(TMP_DIR, `${agent.id}.prompt`);
-    const outFile = path.join(TMP_DIR, `${agent.id}.out`);
-    const doneMarker = path.join(TMP_DIR, `${agent.id}.done`);
-    const progressFile = path.join(TMP_DIR, `${agent.id}.progress`);
-    const displayScript = path.join(__dirname, 'stream-display.js');
-
-    const runningMarker = path.join(TMP_DIR, `${agent.id}.running`);
-
-    const isResume = agent.hasRun;
-
-    const cwdFile = path.join(TMP_DIR, `${agent.id}.cwd`);
-    const sendDir = path.join(TMP_DIR, `${agent.id}-send`);
-    mkdirSync(sendDir, { recursive: true });
-
-    // Build system prompt
-    const sysPromptFile = path.join(TMP_DIR, `${agent.id}.sysprompt`);
-    let systemPrompt = `You are ${agent.name}, a bark-pack pup. All repo work must happen inside ${PROJECTS_DIR}/ — always clone there, even if the repo exists elsewhere on this machine. Reuse existing clones inside ${PROJECTS_DIR}/ (git pull to update). Never reference or modify repos outside of ${PROJECTS_DIR}/. Work on projects using absolute paths from ${PROJECTS_DIR}/ — do NOT cd into them before running commands. When you start working in a project directory, write its absolute path to ${cwdFile} so the server can track it. To send files to the user, copy them to ${sendDir}/. Sign commits with: 🐾 Paw-Printed-By: ${agent.name} <${agent.name.toLowerCase()}@bark-pack>`;
-
-    // Add delegation capability for top-level agents only
-    if (!agent.parentId) {
-        systemPrompt += `\n\n## Delegation\nYou can delegate independent tasks to sub-agents. Sub-agents are fully autonomous — they work independently, appear in chat, and you will NOT receive their results back. Use this when a task is clearly separable and can be done in parallel.\n\nTo spawn a sub-agent:\n\`\`\`bash\nbark delegate "YOUR TASK DESCRIPTION"\n\`\`\`\n\nFor tasks that need isolation (big features, parallel code changes), use --branch to create a separate branch with a PR:\n\`\`\`bash\nbark delegate "YOUR TASK DESCRIPTION" --branch\n\`\`\`\n\nRules:\n- Max ${MAX_SUB_AGENTS} active sub-agents at a time\n- Sub-agents cannot delegate further\n- Include all necessary context in the message (repo URL, branch, requirements)\n- Only delegate clearly independent, well-scoped tasks`;
-    }
-
-    // Append skill content if agent has skills (only on first message)
-    if (!isResume && agent.skills && agent.skills.length > 0) {
-        const skillContent = skillsManager.buildSkillPrompt(agent.skills);
-        if (skillContent) {
-            systemPrompt += skillContent;
-            console.log(`  ⚡ Injecting skills for ${agent.name}: ${agent.skills.join(', ')}`);
-        }
-    }
-    writeFileSync(sysPromptFile, systemPrompt);
-
-    // For backends that don't support system prompts, prepend to first message
-    let actualPrompt = prompt;
-    if (!isResume && !backend.capabilities.systemPrompt) {
-        actualPrompt = `[System Instructions]\n${systemPrompt}\n\n[User Message]\n${prompt}`;
-    }
-
-    // Inject fallback context if present (from reset/switch recovery)
-    if (agent.fallbackContext) {
-        actualPrompt = `${agent.fallbackContext}\n\n[New Message]\n${actualPrompt}`;
-        delete agent.fallbackContext;
-        console.log(`  📦 Injected fallback context for ${agent.name}`);
-    }
-
-    // Track command start time for timeout detection
-    const commandStartTime = Date.now();
-    const commandTimeout = fallbackManager.config.timeout.commandMs;
-
-    // Write prompt and clean up previous output
-    writeFileSync(promptFile, actualPrompt);
-    writeFileSync(runningMarker, '1');
-    for (const f of [outFile, doneMarker, progressFile]) {
-        try { unlinkSync(f); } catch {}
-    }
-
-    agent.hasRun = true;
-    saveState();
-
-    // cd into agent's working directory if set and still exists, otherwise stay in bark-pack
-    if (agent.cwd && !existsSync(agent.cwd)) {
-        console.log(`  ⚠️ ${agent.name}'s cwd no longer exists: ${agent.cwd} — resetting`);
-        agent.cwd = null;
-        saveState();
-    }
-
-    // Build command using backend
-    const scriptFile = path.join(TMP_DIR, `${agent.id}.sh`);
-    const { script } = backend.buildCommand({
-        promptFile,
-        sessionId: agent.sessionId,
-        isResume,
-        model: agent.model,
-        systemPromptFile: sysPromptFile,
-        streamParserScript: displayScript,
-        agentId: agent.id,
-        tmpDir: TMP_DIR,
-        mcpConfigFile: existsSync(MCP_CONFIG_FILE) ? MCP_CONFIG_FILE : null,
-    });
-    writeFileSync(scriptFile, script, { mode: 0o755 });
-
-    console.log(`  🔄 Running ${backend.displayName} for ${agent.name}...`);
-
-    // Ensure tmux session exists (may have been lost on restart)
-    try {
-        execSync(`tmux has-session -t "${agent.tmuxSession}" 2>/dev/null`, EXEC_OPTS);
-    } catch {
-        try {
-            const startDir = agent.cwd && existsSync(agent.cwd) ? agent.cwd : PROJECTS_DIR;
-            execSync(`tmux new-session -d -s "${agent.tmuxSession}" -c "${startDir}"`, EXEC_OPTS);
-            execSync(`tmux send-keys -t "${agent.tmuxSession}" "echo '=== 🐕 ${agent.name} (${agent.id}) === (restored)'" Enter`, EXEC_OPTS);
-            setupTmuxEnv(agent.tmuxSession, agent.id);
-            console.log(`  🔄 Restored tmux session for ${agent.name}`);
-        } catch (e) {
-            console.log(`  ❌ Failed to create tmux session for ${agent.name}: ${e.message}`);
-            adapter.send(`❌ [${agent.name}] tmux error: ${e.message.substring(0, 200)}`).catch(() => {});
-            return;
-        }
-    }
-
-    try {
-        execSync(`tmux send-keys -t "${agent.tmuxSession}" "bash '${scriptFile}'" Enter`, EXEC_OPTS);
-    } catch (e) {
-        console.log(`  ❌ Failed to send command to ${agent.name} tmux: ${e.message}`);
-        adapter.send(`❌ [${agent.name}] tmux error: ${e.message.substring(0, 200)}`).catch(() => {});
-        return;
-    }
-
-    let lastProgress = '';
-
-    // Poll for progress updates and edit the live message
-    const poll = setInterval(async () => {
-        if (shuttingDown) { clearInterval(poll); return; }
-        // Update live message with progress
-        if (liveMsgId && existsSync(progressFile)) {
-            try {
-                const progress = readFileSync(progressFile, 'utf8').trim();
-                if (progress && progress !== lastProgress) {
-                    lastProgress = progress;
-                    const maxLen = 4096;
-                    const preview = progress.length <= maxLen
-                        ? progress
-                        : progress.substring(0, maxLen) + '...';
-                    await adapter.edit(liveMsgId, `${icon} [${agent.name}]:\n${preview}`);
-                }
-            } catch {}
-        }
-
-        // Check for timeout
-        if (fallbackManager.detector.isTimedOut(commandStartTime, commandTimeout)) {
-            clearInterval(poll);
-            console.log(`  ⏰ ${agent.name} timed out after ${commandTimeout / 1000}s`);
-            timeline.emit('timeout', { agentId: agent.id, agentName: agent.name, backend: agent.backend });
-
-            // Record timeout error
-            historyManager.recordError(agent.id, 'timeout', 'Command timed out');
-
-            // Notify user
-            await adapter.edit(liveMsgId, `⏰ [${agent.name}] timed out. Reply to retry.`);
-            return;
-        }
-
-        // Check if done
-        if (!existsSync(doneMarker)) return;
-        clearInterval(poll);
-        try { execSync(`rm -f "${runningMarker}"`, EXEC_OPTS); } catch {}
-
-        // Detect if pup set a working directory via sentinel file
-        try {
-            if (existsSync(cwdFile)) {
-                const newCwd = readFileSync(cwdFile, 'utf8').trim();
-                if (newCwd && newCwd !== agent.cwd && existsSync(newCwd)) {
-                    agent.cwd = newCwd;
-                    saveState();
-                    console.log(`  📂 ${agent.name} working in: ${newCwd}`);
-                    timeline.emit('cwd_change', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { cwd: newCwd } });
-                }
+        async onProgress(agent, progress) {
+            if (liveMsgId) {
+                const msg = formatAgentMessage(agent, progress, { isProgress: true });
+                await adapter.edit(liveMsgId, msg, { markdown: false });
             }
-        } catch {}
+        },
 
-        await updatePinnedStatus();
+        async onComplete(agent, output, exitCode, { sendDir, toolsUsed, lastProgress }) {
+            await updatePinnedStatus();
 
-        // Read the final output
-        let output = '';
-        try {
-            output = readFileSync(outFile, 'utf8').trim();
-        } catch {}
-
-        if (!output) output = lastProgress || '(no output)';
-
-        // Read exit code and check for failure
-        let exitCode = '0';
-        try {
-            exitCode = readFileSync(doneMarker, 'utf8').trim();
-        } catch {}
-
-        // Extract session ID from session file (for backends like Codex that generate it)
-        const sessionFile = path.join(TMP_DIR, `${agent.id}.session`);
-        if (!agent.sessionId && existsSync(sessionFile)) {
-            try {
-                const extractedId = readFileSync(sessionFile, 'utf8').trim();
-                if (extractedId) {
-                    agent.sessionId = extractedId;
-                    saveState();
-                    console.log(`  🔑 Extracted session ID for ${agent.name}: ${extractedId}`);
-                }
-            } catch {}
-        }
-
-        // Extract tools used from progress for history
-        const toolsUsed = historyManager.extractToolsFromOutput(lastProgress || '');
-
-        // Save assistant turn to history
-        const historyResult = historyManager.addAssistantTurn(agent.id, output, {
-            tools: toolsUsed,
-            filesModified: [],  // Could parse from output if needed
-            exitCode: parseInt(exitCode, 10),
-            cwd: agent.cwd,
-        });
-
-        // Record usage/cost data (Claude Code writes .usage file)
-        const usageFile = path.join(TMP_DIR, `${agent.id}.usage`);
-        if (existsSync(usageFile)) {
-            try {
-                const usageData = JSON.parse(readFileSync(usageFile, 'utf8'));
-                usageTracker.record(agent.id, agent.name, agent.backend, usageData);
-                unlinkSync(usageFile);
-                broadcastToWS({ type: 'usage_update', usage: usageTracker.getAll() });
-            } catch {}
-        }
-
-        // Check for failure and trigger fallback
-        const failure = fallbackManager.detector.classifyFailure(output, exitCode, true);
-        if (failure && fallbackManager.config.enabled) {
-            console.log(`  ⚠️ ${agent.name} failed: ${failure.type}`);
-
-            // Execute fallback
-            const fallbackResult = await fallbackManager.executeFallback(
-                agent, failure, adapter, backends, null
-            );
-
-            if (fallbackResult.success && fallbackResult.action !== 'retry_same_session') {
-                // Notify user of fallback
-                const notification = fallbackManager.buildNotification(agent, fallbackResult, failure);
-                if (notification && liveMsgId) {
-                    await adapter.edit(liveMsgId, notification);
-                }
-                // Context was injected, agent will retry on next message
-                // Don't send the error output
-                return;
-            }
-        }
-
-        const maxLen = 4096;
-        const text = output.length <= maxLen
-            ? `${icon} [${agent.name}]:\n\n${output}`
-            : `${icon} [${agent.name}] (truncated):\n\n${output.substring(0, maxLen)}...`;
-
-        // Final: send new message or edit in-place depending on adapter capability
-        let responseMsgId = liveMsgId;
-        if (liveMsgId && adapter.capabilities?.finalMessageBehavior === 'send') {
-            // Mark the thinking bubble as done, then send the result as a new message
-            await adapter.edit(liveMsgId, `${icon} [${agent.name}]: ✅`);
-            const newMsgId = await adapter.send(text, replyToId || liveMsgId);
-            if (newMsgId) {
-                responseMsgId = newMsgId;
-                msgToAgent.set(newMsgId, agent.id);
-                saveState();
-            }
-            console.log(`  ✅ ${agent.name} responded via new msg (${output.length} chars)`);
-        } else if (liveMsgId) {
-            const edited = await adapter.edit(liveMsgId, text);
-            if (edited) {
-                console.log(`  ✅ ${agent.name} responded (${output.length} chars)`);
-            } else {
-                // Edit failed, send new message
-                const newMsgId = await adapter.send(text);
-                if (newMsgId) {
-                    responseMsgId = newMsgId;
-                    msgToAgent.set(newMsgId, agent.id);
-                    saveState();
-                }
-                console.log(`  ✅ ${agent.name} responded via new msg (${output.length} chars)`);
-            }
-        } else {
-            const newMsgId = await adapter.send(text);
-            if (newMsgId) {
-                responseMsgId = newMsgId;
-                msgToAgent.set(newMsgId, agent.id);
-                saveState();
-            }
-            console.log(`  ✅ ${agent.name} responded (${output.length} chars)`);
-        }
-        timeline.emit('response', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { chars: output.length, exitCode: parseInt(exitCode, 10) } });
-
-        // Send any files the pup placed in its send directory
-        try {
-            if (existsSync(sendDir)) {
-                const files = readdirSync(sendDir);
-                for (const file of files) {
-                    const filePath = path.join(sendDir, file);
-                    try {
-                        const caption = `📎 [${agent.name}]: ${file}`;
-                        await adapter.sendFile(filePath, caption, responseMsgId);
-                        console.log(`  📎 ${agent.name} sent file: ${file}`);
-                        timeline.emit('file_sent', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { file } });
-                    } catch (e) {
-                        console.log(`  ⚠️ ${agent.name} failed to send file ${file}: ${e.message}`);
+            // Check for failure and trigger fallback
+            const failure = fallbackManager.detector.classifyFailure(output, String(exitCode), true);
+            if (failure && fallbackManager.config.enabled) {
+                console.log(`  ⚠️ ${agent.name} failed: ${failure.type}`);
+                const fallbackResult = await fallbackManager.executeFallback(
+                    agent, failure, adapter, backends, null
+                );
+                if (fallbackResult.success && fallbackResult.action !== 'retry_same_session') {
+                    const notification = fallbackManager.buildNotification(agent, fallbackResult, failure);
+                    if (notification && liveMsgId) {
+                        await adapter.edit(liveMsgId, notification);
                     }
-                    try { unlinkSync(filePath); } catch {}
+                    return;
                 }
             }
-        } catch {}
-    }, 2000);
+
+            // Format and deliver response
+            const text = formatAgentMessage(agent, output);
+            const responseMsgId = await deliverResponse(adapter, agent, text, liveMsgId, replyToId);
+
+            // Send any files the pup placed in its send directory
+            try {
+                if (existsSync(sendDir)) {
+                    const files = readdirSync(sendDir);
+                    for (const file of files) {
+                        const filePath = path.join(sendDir, file);
+                        try {
+                            const caption = `📎 [${agent.name}]: ${file}`;
+                            await adapter.sendFile(filePath, caption, responseMsgId);
+                            console.log(`  📎 ${agent.name} sent file: ${file}`);
+                            timeline.emit('file_sent', { agentId: agent.id, agentName: agent.name, backend: agent.backend, meta: { file } });
+                        } catch (e) {
+                            console.log(`  ⚠️ ${agent.name} failed to send file ${file}: ${e.message}`);
+                        }
+                        try { unlinkSync(filePath); } catch {}
+                    }
+                }
+            } catch {}
+        },
+
+        async onTimeout(agent) {
+            if (liveMsgId) {
+                await adapter.edit(liveMsgId, `⏰ [${agent.name}] timed out. Reply to retry.`);
+            }
+        },
+
+        async onTmuxError(agent, error) {
+            adapter.send(`❌ [${agent.name}] tmux error: ${error.substring(0, 200)}`).catch(() => {});
+        },
+    });
 }
 
 function getActiveSubAgents(parentId) {
@@ -1854,7 +1762,7 @@ async function runDaily(adapter) {
 
             for (const f of [outFile, doneFile]) { try { unlinkSync(f); } catch {} }
 
-            const standupPrompt = 'Quick standup — answer from memory, no research or tool use. 3 lines, plain text only, no markdown:\nLine 1: what you did last\nLine 2: what\'s next\nLine 3: blockers or "no blockers"';
+            const standupPrompt = 'Standup. Answer from memory only — no tool use, no research. Plain text, 3 lines max:\n1. Done: [what you completed]\n2. Next: [what\'s remaining]\n3. Blockers: [any blockers, or "none"]';
             writeFileSync(promptFile, standupPrompt);
 
             // Build standup command using backend

@@ -152,7 +152,7 @@ function createTelegramAdapter({ token, chatId }) {
             return polling && !!defaultChatId;
         },
 
-        async send(text, replyToId) {
+        async send(text, replyToId, { markdown = true } = {}) {
             if (!defaultChatId) {
                 console.log('  ⚠️ Telegram send skipped — chat ID not set yet');
                 return null;
@@ -160,8 +160,8 @@ function createTelegramAdapter({ token, chatId }) {
             const body = {
                 chat_id: defaultChatId,
                 text: truncateTelegram(text),
-                parse_mode: 'Markdown',
             };
+            if (markdown) body.parse_mode = 'Markdown';
             if (replyToId) {
                 body.reply_to_message_id = stripPrefix(replyToId);
             }
@@ -170,7 +170,7 @@ function createTelegramAdapter({ token, chatId }) {
                 return 'tg:' + result.message_id;
             } catch (e) {
                 // Retry without Markdown if parse fails
-                if (e.message.includes("can't parse")) {
+                if (markdown && e.message.includes("can't parse")) {
                     console.log(`  ⚠️ Telegram Markdown parse failed in send(), retrying plain: ${e.message.substring(0, 120)}`);
                     delete body.parse_mode;
                     const result = await api('sendMessage', body);
@@ -211,20 +211,20 @@ function createTelegramAdapter({ token, chatId }) {
             }
         },
 
-        async edit(msgId, text) {
+        async edit(msgId, text, { markdown = true } = {}) {
             if (!defaultChatId) return false;
             const body = {
                 chat_id: defaultChatId,
                 message_id: Number(stripPrefix(msgId)),
                 text: truncateTelegram(text),
-                parse_mode: 'Markdown',
             };
+            if (markdown) body.parse_mode = 'Markdown';
             try {
                 await api('editMessageText', body);
                 return true;
             } catch (e) {
                 // Retry without Markdown if parse fails
-                if (e.message.includes("can't parse")) {
+                if (markdown && e.message.includes("can't parse")) {
                     console.log(`  ⚠️ Telegram Markdown parse failed in edit(), retrying plain: ${e.message.substring(0, 120)}`);
                     delete body.parse_mode;
                     try {

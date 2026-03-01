@@ -8,14 +8,14 @@ const historyManager = require('./index');
 /**
  * Summary prompt template
  */
-const SUMMARY_PROMPT = `Summarize our conversation so far in 200 words or less. Include:
-1. Current task and goal
-2. Key decisions made
-3. Files created or modified (list paths)
-4. Current progress status
-5. Any blockers or pending items
+const SUMMARY_PROMPT = `Summarize this conversation in under 150 words. Plain text, no markdown.
 
-Format: Plain text, concise. No markdown headers.`;
+Cover exactly these points:
+1. GOAL: What task was requested
+2. DONE: What was completed (list modified files as paths)
+3. STATUS: Current state (done / in-progress / blocked)
+4. DECISIONS: Key choices made (if any)
+5. NEXT: What remains to do (if anything)`;
 
 /**
  * Build context injection prompt from history
@@ -56,7 +56,7 @@ function buildContextPrompt(history, options = {}) {
     }
 
     // Add continuation instruction
-    parts.push('\n[Continue from where we left off. The previous session ended unexpectedly.]');
+    parts.push('[Continue from where you left off. Your previous session was reset — all context above is reconstructed from history. Do NOT repeat completed work.]');
 
     return parts.join('\n\n');
 }
@@ -80,7 +80,7 @@ function buildMinimalContext(history) {
         }
     }
 
-    parts.push('\n[Continuing from previous session.]');
+    parts.push('[Session was reset. Continue from where you left off. Do NOT repeat completed work.]');
 
     return parts.join('\n\n');
 }
