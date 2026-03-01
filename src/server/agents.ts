@@ -42,6 +42,7 @@ import {
   formatAgentMessage,
   deliverResponse,
 } from './execution.js';
+import { requestApproval } from './approval.js';
 
 // Lazily injected dependencies
 let _backends: BackendsProvider | null = null;
@@ -219,7 +220,7 @@ export function runAgentCommand(
       }
     },
 
-    async onComplete(agent: Agent, output: string, exitCode: number, { sendDir, toolsUsed, lastProgress }) {
+    async onComplete(agent: Agent, output: string, exitCode: number, { sendDir, toolsUsed, lastProgress, violations }) {
       await updatePinnedStatus();
 
       // Check for failure and trigger fallback
@@ -248,6 +249,13 @@ export function runAgentCommand(
           }
           return;
         }
+      }
+
+      // Check for policy violations — hold response pending approval
+      if (violations && violations.length > 0) {
+        const worst = violations.find(v => v.action === 'block') || violations[0];
+        await requestApproval(agent, adapter, worst, output, liveMsgId, replyToId);
+        return;
       }
 
       // Deliver response — auto-chunks long output into multiple messages

@@ -20,6 +20,7 @@ const outFile = path.join(tmpDir, `${agentId}.out`);
 const doneMarker = path.join(tmpDir, `${agentId}.done`);
 const sessionFile = path.join(tmpDir, `${agentId}.session`);
 const usageFile = path.join(tmpDir, `${agentId}.usage`);
+const violationFile = path.join(tmpDir, `${agentId}.violation`);
 
 // --- State ---
 let fullText = '';
@@ -32,6 +33,75 @@ const MAX_PROGRESS_TEXT = 8 * 1024; // 8KB — only used for thinking preview
 // Tunable via env (set in the tmux session by the backend's buildCommand)
 const THROTTLE_MS = parseInt(process.env.STREAM_THROTTLE_MS || '800', 10);
 const THINKING_PREVIEW_LEN = parseInt(process.env.STREAM_THINKING_PREVIEW_LEN || '200', 10);
+
+// --- Tool name normalization (cross-backend) ---
+// Maps backend-specific tool names to canonical names used in policy rules.
+// Gemini uses snake_case (`shell`, `read_file`), Cursor may use camelCase variants.
+const TOOL_NAME_ALIASES: Record<string, string> = {
+  shell: 'Bash', run_command: 'Bash', execute_command: 'Bash', terminal: 'Bash',
+  read_file: 'Read', read: 'Read',
+  write_file: 'Write', write: 'Write',
+  edit_file: 'Edit', edit: 'Edit',
+  search_replace: 'Edit', multi_edit: 'MultiEdit', multiEdit: 'MultiEdit',
+  list_directory: 'ListDir', list_dir: 'ListDir',
+  search: 'Grep', find_files: 'Glob',
+  web_fetch: 'WebFetch',
+};
+
+function normalizeToolName(name: string): string {
+  return TOOL_NAME_ALIASES[name] ?? TOOL_NAME_ALIASES[name.toLowerCase()] ?? name;
+}
+
+// --- Policy engine (lightweight, loaded from env) ---
+interface PolicyRuleCompact { tool: string; pattern?: string; action: string; }
+interface PolicyConfig { defaultAction: string; rules: PolicyRuleCompact[]; barkignore: string[]; }
+
+let policyConfig: PolicyConfig = { defaultAction: 'block', rules: [], barkignore: [] };
+let compiledPolicyRules: Array<{ tool: RegExp; pattern: RegExp | null; action: string }> = [];
+const violations: Array<{ tool: string; args: string; action: string; timestamp: number }> = [];
+
+// Tool argument accumulation (for Claude Code input_json_delta)
+let currentToolName = '';
+let currentToolInput = '';
+
+try {
+  const rawPolicy = process.env.BARK_POLICY_RULES;
+  if (rawPolicy) {
+    policyConfig = JSON.parse(rawPolicy);
+    compiledPolicyRules = (policyConfig.rules || []).map(r => ({
+      tool: new RegExp(`^${r.tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+      pattern: r.pattern ? new RegExp(r.pattern, 'i') : null,
+      action: r.action,
+    }));
+  }
+} catch { /* ignore parse errors — no policy enforcement */ }
+
+function evaluateToolPolicy(toolName: string, toolArgs: string): string {
+  for (const rule of compiledPolicyRules) {
+    if (!rule.tool.test(toolName)) continue;
+    if (rule.pattern && !rule.pattern.test(toolArgs)) continue;
+    return rule.action;
+  }
+  return policyConfig.defaultAction;
+}
+
+function checkAndRecordViolation(rawToolName: string, toolArgs: string): void {
+  if (compiledPolicyRules.length === 0) return;
+  const toolName = normalizeToolName(rawToolName);
+  const action = evaluateToolPolicy(toolName, toolArgs);
+  if (action === 'require_approval' || action === 'block') {
+    violations.push({ tool: toolName, args: toolArgs.substring(0, 2048), action, timestamp: Date.now() });
+    fs.writeFileSync(violationFile, JSON.stringify(violations));
+  }
+}
+
+function flushCurrentTool(): void {
+  if (currentToolName) {
+    checkAndRecordViolation(currentToolName, currentToolInput);
+    currentToolName = '';
+    currentToolInput = '';
+  }
+}
 
 function formatElapsed(): string {
   const secs = Math.floor((Date.now() - startTime) / 1000);
@@ -83,7 +153,7 @@ interface StreamEventData {
   type: string;
   event?: {
     type?: string;
-    delta?: { type?: string; thinking?: string; text?: string };
+    delta?: { type?: string; thinking?: string; text?: string; partial_json?: string };
     content_block?: { type?: string; name?: string };
   };
   // Codex fields
@@ -104,6 +174,8 @@ interface StreamEventData {
   content?: string;
   delta?: boolean;
   status?: string;
+  tool_name?: string;
+  parameters?: Record<string, unknown>;
   stats?: {
     models?: Record<string, { tokens?: { prompt?: number; candidates?: number } }>;
   } | null;
@@ -111,7 +183,14 @@ interface StreamEventData {
   subtype?: string;
   text?: string;
   message?: {
-    content?: Array<{ type?: string; text?: string; name?: string }>;
+    content?: Array<{ type?: string; text?: string; name?: string; input?: Record<string, unknown> }>;
+  };
+  tool_call?: {
+    shellToolCall?: { command?: string };
+    readToolCall?: { path?: string };
+    editToolCall?: { path?: string };
+    writeToolCall?: { path?: string };
+    [key: string]: unknown;
   };
   // Result fields (shared)
   result?: string;
@@ -151,12 +230,25 @@ process.stdin.on('data', (chunk: string) => {
           process.stdout.write(event.delta.text || '');
         }
 
+        // Accumulate tool input JSON for policy checking
+        if (event?.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
+          currentToolInput += event.delta.partial_json || '';
+        }
+
         // Tool use - track it
         if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+          flushCurrentTool();
           const toolName = event.content_block.name || 'tool';
+          currentToolName = toolName;
+          currentToolInput = '';
           tools.push(toolName);
           process.stdout.write(`\n${getToolIcon(toolName)} ${toolName}\n`);
           writeProgress();
+        }
+
+        // Tool use block ends — flush accumulated input for policy check
+        if (event?.type === 'content_block_stop') {
+          flushCurrentTool();
         }
 
         // Thinking block starts
@@ -211,6 +303,7 @@ process.stdin.on('data', (chunk: string) => {
         // Command execution (tool use)
         if (item.type === 'command_execution') {
           tools.push('Bash');
+          checkAndRecordViolation('Bash', item.command || '');
           process.stdout.write(`\n💻 Bash: ${item.command || ''}\n`);
           if (item.aggregated_output) {
             process.stdout.write(item.aggregated_output + '\n');
@@ -249,6 +342,16 @@ process.stdin.on('data', (chunk: string) => {
         writeProgress();
       }
 
+      // Gemini tool use
+      if (data.type === 'tool_use' && data.tool_name) {
+        const toolName = data.tool_name;
+        tools.push(toolName);
+        const argsStr = data.parameters ? JSON.stringify(data.parameters) : '';
+        checkAndRecordViolation(toolName, argsStr);
+        process.stdout.write(`\n${getToolIcon(toolName)} ${toolName}\n`);
+        writeProgress();
+      }
+
       if (data.type === 'result' && data.status) {
         // Gemini result format
         fs.writeFileSync(outFile, fullText || '(no output)');
@@ -282,6 +385,33 @@ process.stdin.on('data', (chunk: string) => {
         process.stdout.write('\x1b[2m' + (data.text || '') + '\x1b[0m');
       }
 
+      // Cursor tool_call events (native format with *ToolCall keys)
+      if (data.type === 'tool_call' && data.subtype === 'started' && data.tool_call) {
+        const tc = data.tool_call;
+        let toolName = 'tool';
+        let argsStr = '';
+        if (tc.shellToolCall) {
+          toolName = 'Bash';
+          argsStr = (tc.shellToolCall as { command?: string }).command || '';
+        } else if (tc.readToolCall) { toolName = 'Read'; argsStr = JSON.stringify(tc.readToolCall);
+        } else if (tc.editToolCall) { toolName = 'Edit'; argsStr = JSON.stringify(tc.editToolCall);
+        } else if (tc.writeToolCall) { toolName = 'Write'; argsStr = JSON.stringify(tc.writeToolCall);
+        } else {
+          for (const key of Object.keys(tc)) {
+            if (key.endsWith('ToolCall')) {
+              toolName = key.replace('ToolCall', '');
+              toolName = toolName.charAt(0).toUpperCase() + toolName.slice(1);
+              argsStr = JSON.stringify(tc[key]);
+              break;
+            }
+          }
+        }
+        tools.push(toolName);
+        checkAndRecordViolation(toolName, argsStr);
+        process.stdout.write(`\n${getToolIcon(toolName)} ${toolName}\n`);
+        writeProgress();
+      }
+
       if (data.type === 'assistant' && data.message?.content) {
         // Extract text from content array
         for (const block of data.message.content) {
@@ -293,6 +423,8 @@ process.stdin.on('data', (chunk: string) => {
           if (block.type === 'tool_use') {
             const toolName = block.name || 'tool';
             tools.push(toolName);
+            const argsStr = block.input ? JSON.stringify(block.input) : '';
+            checkAndRecordViolation(toolName, argsStr);
             process.stdout.write(`\n${getToolIcon(toolName)} ${toolName}\n`);
           }
         }
@@ -321,6 +453,7 @@ process.stdin.on('data', (chunk: string) => {
 });
 
 process.stdin.on('end', () => {
+  flushCurrentTool();
   if (!fs.existsSync(doneMarker)) {
     fs.writeFileSync(outFile, fullText || '(no output)');
     fs.writeFileSync(doneMarker, '1');

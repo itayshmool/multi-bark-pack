@@ -11,6 +11,7 @@ import { transcribeAudio } from './voice.js';
 import { handleCommand } from './commands.js';
 import { findAgentByName, spawnAgent, sendToAgent } from './agents.js';
 import { parseMessageTags } from '../utils/tags.js';
+import { parseApprovalReply, resolveApproval } from './approval.js';
 
 // Lazily injected dependencies
 let _securityGuard: SecurityGuardProvider | null = null;
@@ -91,6 +92,27 @@ export async function onMessage(msg: NormalizedMessage): Promise<void> {
         console.log(`  🎤 Transcribed: ${transcript.substring(0, 100)}`);
       } else {
         mediaContext = `[Voice message received but could not be transcribed: ${downloaded.filePath}]\n\n`;
+      }
+    }
+  }
+
+  // --- Approval intercept: check if this is a reply to an approval request ---
+  // Runs after voice transcription so voice "approve"/"deny" replies work.
+  if (msg.isQuotedReply && body) {
+    const verdict = parseApprovalReply(body);
+    if (verdict) {
+      const quoted = await adapter.getQuotedMessage(msg.raw);
+      if (quoted) {
+        const agentId = getMsgAgent(quoted.id);
+        if (agentId && hasAgent(agentId)) {
+          const agent = getAgents().get(agentId)!;
+          if (agent.approvalPending && agent.approvalPending.messageId === quoted.id) {
+            console.log(`  🛡️ Approval ${verdict} for ${agent.name}`);
+            if (listeningMsgId) await adapter.deleteMsg(listeningMsgId);
+            await resolveApproval(agent, verdict === 'approve', adapter);
+            return;
+          }
+        }
       }
     }
   }

@@ -177,6 +177,7 @@ function _flushState(): void {
         deletedAt: agent.deletedAt || null,
         source: agent.source || 'whatsapp',
         retryCount: agent.retryCount || 0,
+        approvalPending: agent.approvalPending || null,
       };
     }
   }

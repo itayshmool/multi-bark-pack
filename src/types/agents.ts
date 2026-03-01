@@ -1,3 +1,5 @@
+import type { ApprovalRequest } from './approval.js';
+
 export type AgentStatus = 'active' | 'deleted';
 
 export type AgentSource = 'whatsapp' | 'telegram' | 'slack' | 'ui' | 'delegation';
@@ -21,6 +23,7 @@ export interface Agent {
   source: AgentSource;
   packId?: string;
   fallbackContext?: string | null;
+  approvalPending?: ApprovalRequest | null;
 }
 
 export interface AgentClassification {

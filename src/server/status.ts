@@ -144,8 +144,9 @@ export function buildStatusText(): string {
     const modelTag = agent.model && agent.model !== 'sonnet' ? ` [${agent.model}]` : '';
     const projectTag = agent.cwd ? ` 📂${path.basename(agent.cwd)}` : '';
     const parentTag = agent.parentId ? ` ↳${agents.get(agent.parentId)?.name || '?'}` : '';
+    const approvalTag = agent.approvalPending ? ' ⏳approval' : '';
     lines.push(
-      `${emoji} *${agent.name}*${parentTag}${backendTag}${modelTag}${projectTag} ${status}`,
+      `${emoji} *${agent.name}*${parentTag}${backendTag}${modelTag}${projectTag}${approvalTag} ${status}`,
     );
   }
 

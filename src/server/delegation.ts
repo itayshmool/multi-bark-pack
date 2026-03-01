@@ -7,6 +7,7 @@ import { shellEscape } from '../utils/shell.js';
 import type { Agent } from '../types/index.js';
 import { EXEC_OPTS, API_SECRET, UI_PORT, TOOLS_DIR } from './config.js';
 import { getAgents } from './state.js';
+import { getPolicyRulesForEnv } from './approval.js';
 
 /** Get active sub-agents for a given parent. */
 export function getActiveSubAgents(parentId: string): Agent[] {
@@ -24,8 +25,12 @@ export function setupTmuxEnv(tmuxSession: string, agentId: string): void {
     if (API_SECRET) {
       execSync(`tmux setenv -t ${escaped} BARK_TOKEN ${shellEscape(API_SECRET)}`, EXEC_OPTS);
     }
+    const policyRules = getPolicyRulesForEnv();
+    if (policyRules && policyRules !== '{}') {
+      execSync(`tmux setenv -t ${escaped} BARK_POLICY_RULES ${shellEscape(policyRules)}`, EXEC_OPTS);
+    }
     execSync(
-      `tmux send-keys -t ${escaped} ${shellEscape(`export BARK_AGENT_ID=$BARK_AGENT_ID BARK_API=$BARK_API BARK_TOKEN=$BARK_TOKEN PATH=${TOOLS_DIR}:"$PATH"`)} Enter`,
+      `tmux send-keys -t ${escaped} ${shellEscape(`export BARK_AGENT_ID=$BARK_AGENT_ID BARK_API=$BARK_API BARK_TOKEN=$BARK_TOKEN BARK_POLICY_RULES=$BARK_POLICY_RULES PATH=${TOOLS_DIR}:"$PATH"`)} Enter`,
       EXEC_OPTS,
     );
   } catch {

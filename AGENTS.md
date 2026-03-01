@@ -3,6 +3,7 @@
 Multi-platform, multi-backend agent swarm. TypeScript + Node.js. Messages from WhatsApp/Telegram/Slack spawn LLM agents in tmux sessions.
 
 **Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — full system design, data flows, module map, state persistence
+**Approval Flow:** [docs/APPROVAL.md](docs/APPROVAL.md) — policy engine, approval commands, barkignore, configuration
 **Instructions:** [CLAUDE.md](CLAUDE.md) — commands, configuration, constraints
 
 ## Project Snapshot
@@ -30,11 +31,11 @@ yarn setup                # Interactive setup wizard
 
 ```
 src/
-├── server/           16 files  Core: routing, agents, execution, API, WebSocket, commands, state
+├── server/           17 files  Core: routing, agents, execution, API, WebSocket, commands, state, approval
 ├── adapters/          3 files  Chat platforms: WhatsApp, Telegram, Slack
 ├── backends/          6 files  LLM CLIs: Claude Code, Cursor, Codex, Gemini + shared utils
 ├── stream-parsers/    5 files  JSON stream output parsers per backend
-├── types/            16 files  All TypeScript type definitions
+├── types/            17 files  All TypeScript type definitions
 ├── history/           3 files  Per-agent conversation tracking + rolling summaries
 ├── fallback/          4 files  Auto recovery: retry → reset → switch backend
 ├── security/          3 files  Optional LLM-based message threat screening
@@ -45,8 +46,8 @@ src/
 ├── utils/             6 files  Shared: error, tokens, text, tags, agent-files, atomic-write
 ├── setup/             6 files  Interactive setup wizard (checks, backends, adapters, env)
 ├── test/              3 files  Legacy test infrastructure (Phase 1)
-└── stream-display.ts  1 file   Standalone: backend output → .progress/.out/.done files
-Tests: 21 co-located *.test.ts files across src/ (Vitest)
+└── stream-display.ts  1 file   Standalone: backend output → .progress/.out/.done/.violation files
+Tests: 22 co-located *.test.ts files across src/ (Vitest)
 
 ```
 
@@ -57,7 +58,7 @@ Tests: 21 co-located *.test.ts files across src/ (Vitest)
 | `scripts/` | Shell: start.sh (auto-restart), prerequisites, install backends/whisper |
 | `tools/bark` | CLI for pup delegation (`bark delegate "task" [--branch]`) |
 | `ui/` | Admin dashboard (static HTML + WebSocket) |
-| `docs/` | ARCHITECTURE, PRODUCT, ROADMAP, README, plans/ |
+| `docs/` | ARCHITECTURE, PRODUCT, ROADMAP, APPROVAL, README, plans/ |
 | `.claude/skills/` | Skill definitions (YAML frontmatter + markdown) |
 | `.bark-tmp/` | Per-agent runtime temp files (gitignored) |
 | `projects/` | Pup working directories (gitignored) |
@@ -67,11 +68,12 @@ Tests: 21 co-located *.test.ts files across src/ (Vitest)
 ```
 Message → Adapter.normalize() → routing.ts
   ├─ Owner filter → Voice transcription → Media download → Security screen
-  ├─ /command → commands.ts
+  ├─ Approval reply? → resolveApproval() (approve/deny pending operation)
+  ├─ /command → commands.ts (including /approve, /deny)
   └─ Route: @mention | reply-to | new spawn
        → agents.ts → execution.ts → tmux → backend CLI
-       → stream-display.ts → .progress/.out/.done
-       → poll → deliver response → history + usage + timeline
+       → stream-display.ts → .progress/.out/.done/.violation
+       → poll → approval gate (policy check) → deliver response → history + usage + timeline
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed flow diagrams.
@@ -98,6 +100,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed flow diagrams.
 | `src/server/agents.ts` | Agent lifecycle: spawn, send, stop, clear, reset, reborn |
 | `src/server/state.ts` | In-memory state + persistence (agents.json, routing.json) |
 | `src/server/api.ts` | REST API routes (/api/agents, /api/stats, etc.) |
+| `src/server/approval.ts` | Policy engine + chat-native approval flow |
 | `src/server/websocket.ts` | Real-time broadcasts to admin UI |
 | `src/backends/shared.ts` | Shared backend metadata, CLI helpers |
 | `src/stream-display.ts` | Standalone: parse backend JSON → temp files |

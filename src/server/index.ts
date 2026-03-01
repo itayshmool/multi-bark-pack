@@ -68,6 +68,7 @@ import { initExecution } from './execution.js';
 import { initAgents } from './agents.js';
 import { initCommands } from './commands.js';
 import { initDaily } from './daily.js';
+import { initApproval } from './approval.js';
 
 // --- Wire Dependencies ---
 
@@ -104,6 +105,12 @@ initDaily({
 initRouting({
   securityGuard: securityGuard as unknown as Parameters<typeof initRouting>[0]['securityGuard'],
   timeline: timeline as unknown as Parameters<typeof initRouting>[0]['timeline'],
+});
+
+// approval.ts needs getAgents and adapter access for timeout checking
+initApproval({
+  getAgents,
+  getAdapters,
 });
 
 // commands.ts needs backends, skillsManager, usageTracker, destroyAllAdapters, getPackNames

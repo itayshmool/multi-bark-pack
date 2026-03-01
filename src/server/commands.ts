@@ -4,6 +4,7 @@
 
 import type { Agent, Adapter, NormalizedMessage, BackendsProvider, SkillsManagerProvider, UsageTrackerProvider } from '../types/index.js';
 import { getAgents, getDeletedAgents, getMsgAgent, saveState } from './state.js';
+import { resolveApproval, loadPolicy, getPolicy } from './approval.js';
 import {
   findAgentByName,
   findDeletedByName,
@@ -75,6 +76,9 @@ export async function handleCommand(
         '`/reborn name` — resurrect shelved pup\n' +
         '`/daily` — standup from all pups\n' +
         '`/stats` — usage & cost summary\n' +
+        '`/approve name` — approve pending operation\n' +
+        '`/deny name` — deny pending operation\n' +
+        '`/reload-policy` — hot-reload bark-policy.json\n' +
         '`/purge` — delete all shelved pups\n' +
         '`/restart` `/shutdown` — server control\n' +
         '_Use `pack` instead of name for all pups_\n\n' +
@@ -520,6 +524,64 @@ export async function handleCommand(
     }
 
     await adapter.send(lines.join('\n'));
+    return true;
+  }
+
+  if (command === '/approve' || command === '/deny') {
+    const isApprove = command === '/approve';
+    const names = body.split(/\s+/).slice(1).map(n => n.replace(/^@/, ''));
+
+    if (names.length === 0 && msg.isQuotedReply) {
+      const agent = await resolveAgentFromReply(msg, adapter);
+      if (agent === null) return true;
+      if (!agent.approvalPending) {
+        await adapter.send(`*${agent.name}* has no pending approval.`);
+        return true;
+      }
+      await resolveApproval(agent, isApprove, adapter);
+      await adapter.send(`${isApprove ? '✅' : '🚫'} ${agent.name}: ${isApprove ? 'approved' : 'denied'}.`);
+      return true;
+    }
+
+    if (names.length === 0) {
+      await adapter.send(`Usage: \`${command} name\` or \`${command} pack\``);
+      return true;
+    }
+
+    const isPack = names.length === 1 && names[0].toLowerCase() === 'pack';
+    const targets = isPack ? [...getAgents().values()] : names.map(n => findAgentByName(n)).filter(Boolean) as Agent[];
+    const resolved: string[] = [];
+    const noPending: string[] = [];
+    const notFound: string[] = [];
+
+    if (!isPack) {
+      for (const n of names) {
+        if (!findAgentByName(n)) notFound.push(n);
+      }
+    }
+
+    for (const agent of targets) {
+      if (!agent.approvalPending) {
+        noPending.push(agent.name);
+        continue;
+      }
+      await resolveApproval(agent, isApprove, adapter);
+      resolved.push(agent.name);
+    }
+
+    const parts: string[] = [];
+    if (resolved.length) parts.push(`${isApprove ? '✅' : '🚫'} ${isApprove ? 'Approved' : 'Denied'}: *${resolved.join('*, *')}*`);
+    if (noPending.length && !isPack) parts.push(`No pending: ${noPending.join(', ')}`);
+    if (notFound.length) parts.push(`❓ Not found: ${notFound.join(', ')}`);
+    if (parts.length === 0) parts.push(isPack ? 'No pups have pending approvals.' : 'Nothing to do.');
+    await adapter.send(parts.join('\n'));
+    return true;
+  }
+
+  if (command === '/reload-policy') {
+    loadPolicy();
+    const policy = getPolicy();
+    await adapter.send(`🛡️ Policy reloaded: ${policy.rules.length} rules, default: ${policy.defaultAction}`);
     return true;
   }
 

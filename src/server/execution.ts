@@ -37,6 +37,8 @@ import {
 import { getAgentIcon } from './naming.js';
 import { broadcastAgents, broadcastToWS, broadcastChatMessage } from './websocket.js';
 import { ensureTmuxSession } from './tmux.js';
+import { getPolicyRulesForPrompt } from './approval.js';
+import type { ViolationRecord } from '../types/index.js';
 
 // Lazily injected dependencies
 let _backends: BackendsProvider | null = null;
@@ -128,6 +130,12 @@ export function buildSystemPrompt(agent: Agent, isResume: boolean): string {
     );
   }
 
+  // Inject approval policy rules
+  const policyPrompt = getPolicyRulesForPrompt();
+  if (policyPrompt) {
+    sections.push(policyPrompt);
+  }
+
   if (!isResume && agent.skills && agent.skills.length > 0 && _skillsManager) {
     const skillContent = _skillsManager.buildSkillPrompt(agent.skills);
     if (skillContent) {
@@ -205,7 +213,8 @@ export function prepareAgentRun(
   // Write prompt and clean up previous output
   writeFileSync(files.prompt, actualPrompt);
   writeFileSync(files.running, '1');
-  for (const f of [files.out, files.done, files.progress]) {
+  const violationPath = path.join(TMP_DIR, `${agent.id}.violation`);
+  for (const f of [files.out, files.done, files.progress, violationPath]) {
     try {
       unlinkSync(f);
     } catch {
@@ -326,7 +335,7 @@ export interface ExecuteCallbacks {
     agent: Agent,
     output: string,
     exitCode: number,
-    extra: AgentRunFiles & { toolsUsed: string[]; lastProgress: string },
+    extra: AgentRunFiles & { toolsUsed: string[]; lastProgress: string; violations: ViolationRecord[] },
   ): Promise<void> | void;
   onTimeout?(agent: Agent): Promise<void> | void;
   onTmuxError?(agent: Agent, error: string): Promise<void> | void;
@@ -443,6 +452,16 @@ export function executeAgentCommand(
         }
       }
 
+      // Read violation records if any
+      let violations: ViolationRecord[] = [];
+      const violFile = path.join(TMP_DIR, `${agent.id}.violation`);
+      if (existsSync(violFile)) {
+        try {
+          violations = JSON.parse(readFileSync(violFile, 'utf8'));
+          unlinkSync(violFile);
+        } catch { /* ignore */ }
+      }
+
       // Record in history
       const toolsUsed = _historyManager!.extractToolsFromOutput(lastProgress || '');
       _historyManager!.addAssistantTurn(agent.id, output, {
@@ -478,6 +497,7 @@ export function executeAgentCommand(
           ...files,
           toolsUsed,
           lastProgress,
+          violations,
         });
       }
       return;
