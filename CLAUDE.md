@@ -48,6 +48,7 @@ Node.js, whatsapp-web.js, @slack/web-api, @slack/socket-mode, tmux, whisper.cpp 
 - `skills/` — Cross-backend skill system
   - `index.js` — Skills manager (loads once at startup)
   - `parser.js` — SKILL.md parser (YAML frontmatter + markdown)
+- `mcp-config.json` — MCP server config: agents get these tools via `--mcp-config` (Claude Code, Cursor, Codex)
 - `tools/bark` — CLI helper for pup delegation (`bark delegate "task"`)
 - `.claude/skills/` — Skill definitions (Claude Code compatible)
 - `prerequisites.sh` — System prerequisites checker/installer (Homebrew, Node, yarn, tmux, Claude CLI, ffmpeg, whisper)

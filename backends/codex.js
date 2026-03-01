@@ -61,9 +61,11 @@ module.exports = function createCodexBackend(config = {}) {
                 streamParserScript,
                 agentId,
                 tmpDir,
+                mcpConfigFile,
             } = opts;
 
             const modelFlag = model && model !== 'default' ? `-m ${model}` : '';
+            const mcpFlag = mcpConfigFile ? `--mcp-config "${mcpConfigFile}"` : '';
 
             // Build the shell script
             // Codex doesn't support system prompts via CLI, prepend to prompt if needed
@@ -71,10 +73,10 @@ module.exports = function createCodexBackend(config = {}) {
 
             if (isResume && sessionId) {
                 // Resume existing session
-                script += `cat "${promptFile}" | codex exec resume "${sessionId}" --json --dangerously-bypass-approvals-and-sandbox ${modelFlag} - 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
+                script += `cat "${promptFile}" | codex exec resume "${sessionId}" --json --dangerously-bypass-approvals-and-sandbox ${mcpFlag} ${modelFlag} - 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
             } else {
                 // New session
-                script += `cat "${promptFile}" | codex exec --json --dangerously-bypass-approvals-and-sandbox ${modelFlag} - 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
+                script += `cat "${promptFile}" | codex exec --json --dangerously-bypass-approvals-and-sandbox ${mcpFlag} ${modelFlag} - 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
             }
 
             return {

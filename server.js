@@ -58,6 +58,7 @@ const PACKS_FILE = path.join(__dirname, 'packs.json');
 const MAX_DELEGATION_DEPTH = parseInt(process.env.MAX_DELEGATION_DEPTH || '1', 10);
 const MAX_SUB_AGENTS = parseInt(process.env.MAX_SUB_AGENTS || '3', 10);
 const TOOLS_DIR = path.join(__dirname, 'tools');
+const MCP_CONFIG_FILE = path.join(__dirname, 'mcp-config.json');
 
 // --- Voice transcription via whisper.cpp (local, free) ---
 function transcribeAudio(audioFilePath) {
@@ -830,6 +831,7 @@ function runAgentCommandForUI(agent, prompt) {
         streamParserScript: displayScript,
         agentId: agent.id,
         tmpDir: TMP_DIR,
+        mcpConfigFile: existsSync(MCP_CONFIG_FILE) ? MCP_CONFIG_FILE : null,
     });
     writeFileSync(scriptFile, script, { mode: 0o755 });
 
@@ -1332,6 +1334,7 @@ function runAgentCommand(agent, prompt, adapter, liveMsgId = null, replyToId = n
         streamParserScript: displayScript,
         agentId: agent.id,
         tmpDir: TMP_DIR,
+        mcpConfigFile: existsSync(MCP_CONFIG_FILE) ? MCP_CONFIG_FILE : null,
     });
     writeFileSync(scriptFile, script, { mode: 0o755 });
 
@@ -1865,6 +1868,7 @@ async function runDaily(adapter) {
                 streamParserScript: displayScript,
                 agentId: `${agent.id}.standup`,
                 tmpDir: TMP_DIR,
+                mcpConfigFile: existsSync(MCP_CONFIG_FILE) ? MCP_CONFIG_FILE : null,
             });
             writeFileSync(scriptFile, script, { mode: 0o755 });
 

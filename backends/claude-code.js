@@ -59,9 +59,11 @@ module.exports = function createClaudeCodeBackend(config = {}) {
                 streamParserScript,
                 agentId,
                 tmpDir,
+                mcpConfigFile,
             } = opts;
 
             const modelFlag = `--model ${model || this.defaultModel}`;
+            const mcpFlag = mcpConfigFile ? `--mcp-config "${mcpConfigFile}"` : '';
 
             // Build claude CLI arguments
             const claudeArgs = isResume
@@ -70,7 +72,7 @@ module.exports = function createClaudeCodeBackend(config = {}) {
 
             // Build the shell script
             let script = '#!/bin/bash\n';
-            script += `cat "${promptFile}" | claude -p --dangerously-skip-permissions ${claudeArgs} --output-format stream-json --verbose --include-partial-messages 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
+            script += `cat "${promptFile}" | claude -p --dangerously-skip-permissions ${claudeArgs} ${mcpFlag} --output-format stream-json --verbose --include-partial-messages 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
 
             return {
                 script,

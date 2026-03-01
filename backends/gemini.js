@@ -62,6 +62,7 @@ module.exports = function createGeminiBackend(config = {}) {
                 streamParserScript,
                 agentId,
                 tmpDir,
+                mcpConfigFile,
             } = opts;
 
             const modelFlag = model ? `-m ${model}` : '';

@@ -66,9 +66,11 @@ module.exports = function createCursorBackend(config = {}) {
                 streamParserScript,
                 agentId,
                 tmpDir,
+                mcpConfigFile,
             } = opts;
 
             const modelFlag = `--model ${model || this.defaultModel}`;
+            const mcpFlag = mcpConfigFile ? `--mcp-config "${mcpConfigFile}"` : '';
 
             // Cursor uses --resume for both new and continued sessions
             // For new sessions, we pre-create the chat ID with create-chat
@@ -78,7 +80,7 @@ module.exports = function createCursorBackend(config = {}) {
             // Note: Cursor doesn't support --system-prompt, so we ignore systemPromptFile
             // The server will prepend system instructions to the first prompt
             let script = '#!/bin/bash\n';
-            script += `cat "${promptFile}" | cursor-agent -p -f ${resumeFlag} ${modelFlag} --output-format stream-json --stream-partial-output 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
+            script += `cat "${promptFile}" | cursor-agent -p -f ${resumeFlag} ${modelFlag} ${mcpFlag} --output-format stream-json --stream-partial-output 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
 
             return {
                 script,
