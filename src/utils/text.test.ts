@@ -112,4 +112,25 @@ describe('splitMessage', () => {
     // Should NOT split at index 2 (below 30% threshold), instead hard-split at 100
     expect(chunks.length).toBe(1); // total is 100 chars, fits in 100
   });
+
+  it('does not infinite-loop when maxLen is 0', () => {
+    const text = 'hello world';
+    const chunks = splitMessage(text, 0);
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.join('')).toContain('hello');
+  });
+
+  it('does not infinite-loop when maxLen is negative', () => {
+    const text = 'hello world';
+    const chunks = splitMessage(text, -5);
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.join('')).toContain('hello');
+  });
+
+  it('does not infinite-loop when maxLen is 1', () => {
+    const text = 'abc';
+    const chunks = splitMessage(text, 1);
+    expect(chunks.length).toBe(3);
+    expect(chunks).toEqual(['a', 'b', 'c']);
+  });
 });

@@ -28,18 +28,37 @@ export function timeSince(date: Date): string {
   return `${days}d ago`;
 }
 
-export function classifyAgents(): AgentClassification[] {
-  // Batch tmux session check with a single call
-  const aliveSessions = new Set<string>();
+const TMUX_CACHE_TTL_MS = 5000;
+let _tmuxCache: Set<string> | null = null;
+let _tmuxCacheTime = 0;
+
+function getTmuxSessions(): Set<string> {
+  const now = Date.now();
+  if (_tmuxCache && now - _tmuxCacheTime < TMUX_CACHE_TTL_MS) return _tmuxCache;
+
+  const sessions = new Set<string>();
   try {
     const tmuxOut = execSync('tmux ls -F "#{session_name}" 2>/dev/null', EXEC_OPTS).toString();
     for (const line of tmuxOut.split('\n')) {
       const name = line.trim();
-      if (name) aliveSessions.add(name);
+      if (name) sessions.add(name);
     }
   } catch {
     // tmux ls fails if no sessions exist
   }
+  _tmuxCache = sessions;
+  _tmuxCacheTime = now;
+  return sessions;
+}
+
+/** Reset tmux cache (for testing). */
+export function _resetTmuxCache(): void {
+  _tmuxCache = null;
+  _tmuxCacheTime = 0;
+}
+
+export function classifyAgents(): AgentClassification[] {
+  const aliveSessions = getTmuxSessions();
 
   const agents = getAgents();
   const ranked: AgentClassification[] = [];
@@ -151,24 +170,17 @@ export async function updatePinnedStatus(): Promise<void> {
     const text = buildStatusText();
     const statusMsgs = getStatusMsgs();
 
-    for (const adapter of adapters) {
-      if (!adapter.isReady()) continue;
+    await Promise.all(adapters.filter(a => a.isReady()).map(async (adapter) => {
       try {
         const existingId = statusMsgs[adapter.name];
         if (existingId) {
           const edited = await adapter.edit(existingId, text);
-          if (edited) continue;
-          // Edit failed (message deleted?), unpin old and send a new one
-          try {
-            await adapter.unpin(existingId);
-          } catch {
-            // ignore
-          }
+          if (edited) return;
+          try { await adapter.unpin(existingId); } catch { /* ignore */ }
           setStatusMsg(adapter.name, null);
         }
-        // Send new status message, pin it
         const msgId = await adapter.send(text);
-        if (!msgId) continue; // adapter had no channel to send to
+        if (!msgId) return;
         await adapter.pin(msgId);
         setStatusMsg(adapter.name, msgId);
         console.log(`  📌 Pinned new status message (${adapter.name})`);
@@ -176,7 +188,8 @@ export async function updatePinnedStatus(): Promise<void> {
         const msg = errorMessage(e);
         console.log(`  ⚠️ Could not update pinned status (${adapter.name}): ${msg}`);
       }
-    }
+    }));
+    saveState();
   } finally {
     statusUpdateRunning = false;
     // If someone called while we were running, re-run with latest state

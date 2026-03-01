@@ -3,7 +3,7 @@ import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth, MessageMedia } = pkg;
 type ClientInstance = InstanceType<typeof Client>;
 import qrcode from 'qrcode-terminal';
-import { writeFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { TMP_DIR } from '../config/paths.js';
 import type {
@@ -90,20 +90,14 @@ export function createWhatsAppAdapter({
             // Unpin old status messages (recognise by prefix from env)
             try {
               const pinned = await groupChat.getPinnedMessages();
-              for (const msg of pinned) {
-                if (
-                  msg.fromMe &&
-                  STATUS_PREFIXES.some((p: string) =>
-                    msg.body.startsWith(p),
+              await Promise.all(
+                pinned
+                  .filter((msg: any) =>
+                    msg.fromMe &&
+                    STATUS_PREFIXES.some((p: string) => (msg.body ?? '').startsWith(p)),
                   )
-                ) {
-                  try {
-                    await msg.unpin();
-                  } catch {
-                    // ignore unpin errors
-                  }
-                }
-              }
+                  .map((msg: any) => msg.unpin().catch(() => {})),
+              );
             } catch (e: unknown) {
               console.log(
                 `  \u26A0\uFE0F Could not clean old pins: ${errorMessage(e)}`,
@@ -129,7 +123,7 @@ export function createWhatsAppAdapter({
 
             const contact = await msg.getContact();
             const sender = contact.pushname || contact.number;
-            const body = msg.body.trim();
+            const body = (msg.body ?? '').trim();
 
             // Determine media type
             let hasMedia: boolean = msg.hasMedia;
@@ -176,20 +170,23 @@ export function createWhatsAppAdapter({
     },
 
     async send(text: string, replyToId?: string | null) {
-      if (!groupChat)
-        throw new Error('WhatsApp not connected to group');
-      const opts: any = {};
-      if (replyToId) {
-        opts.quotedMessageId = stripPrefix(replyToId);
+      if (!groupChat) return null;
+      try {
+        const opts: any = {};
+        if (replyToId) {
+          opts.quotedMessageId = stripPrefix(replyToId);
+        }
+        const sent = await groupChat.sendMessage(text, opts);
+        msgCache.set(sent.id._serialized, sent);
+        if (msgCache.size > WA_MSG_CACHE_MAX) {
+          const oldestKey = msgCache.keys().next().value;
+          if (oldestKey !== undefined) msgCache.delete(oldestKey);
+        }
+        return 'wa:' + sent.id._serialized;
+      } catch (e: unknown) {
+        console.log(`  ⚠️ WhatsApp send failed: ${errorMessage(e)}`);
+        return null;
       }
-      const sent = await groupChat.sendMessage(text, opts);
-      msgCache.set(sent.id._serialized, sent);
-      // Evict oldest entries when cache grows too large
-      if (msgCache.size > WA_MSG_CACHE_MAX) {
-        const oldestKey = msgCache.keys().next().value;
-        if (oldestKey !== undefined) msgCache.delete(oldestKey);
-      }
-      return 'wa:' + sent.id._serialized;
     },
 
     async sendFile(
@@ -285,7 +282,7 @@ export function createWhatsAppAdapter({
             TMP_DIR,
             `img-${Date.now()}.${ext}`,
           );
-          writeFileSync(
+          await writeFile(
             downloadPath,
             Buffer.from(media.data, 'base64'),
           );
@@ -297,7 +294,7 @@ export function createWhatsAppAdapter({
             TMP_DIR,
             `voice-${Date.now()}.ogg`,
           );
-          writeFileSync(
+          await writeFile(
             downloadPath,
             Buffer.from(media.data, 'base64'),
           );

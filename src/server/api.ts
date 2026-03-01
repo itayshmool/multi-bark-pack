@@ -5,7 +5,8 @@
 import { errorMessage } from '../utils/error.js';
 import { parseMessageTags } from '../utils/tags.js';
 import path from 'node:path';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import express from 'express';
 import type { Express, Request, Response } from 'express';
 import type {
@@ -73,7 +74,7 @@ function processAttachments(attachments: string[]): {
   const images: string[] = [];
   const files: string[] = [];
   const infos: Array<{ filename: string; filepath: string; type: string }> = [];
-  let promptPrefix = '';
+  const prefixParts: string[] = [];
 
   for (const filepath of attachments) {
     if (!existsSync(filepath) || !filepath.startsWith(TMP_DIR)) continue;
@@ -86,14 +87,14 @@ function processAttachments(attachments: string[]): {
 
     if (isImage) {
       images.push(filepath);
-      promptPrefix = `[Image attached: ${filepath}]\nUse the Read tool to view this image, then respond.\n\n${promptPrefix}`;
+      prefixParts.push(`[Image attached: ${filepath}]\nUse the Read tool to view this image, then respond.`);
     } else {
       files.push(filepath);
-      promptPrefix = `[File attached: ${filepath}]\nUse the Read tool to view this file.\n\n${promptPrefix}`;
+      prefixParts.push(`[File attached: ${filepath}]\nUse the Read tool to view this file.`);
     }
   }
 
-  return { promptPrefix, images, files, infos };
+  return { promptPrefix: prefixParts.length ? prefixParts.join('\n\n') + '\n\n' : '', images, files, infos };
 }
 
 export function setupApiRoutes(app: Express, deps: ApiDeps): void {
@@ -121,20 +122,16 @@ export function setupApiRoutes(app: Express, deps: ApiDeps): void {
   // REST API: Get backends
   app.get('/api/backends', async (_req: Request, res: Response) => {
     const list = _deps!.backends.list();
-    // Add version info
-    const results: Array<Record<string, unknown>> = [];
-    for (const b of list) {
-      const backend = _deps!.backends.get(b.name);
-      let version: string | null = null;
-      if (backend) {
-        try {
-          version = await backend.getVersion();
-        } catch {
-          // ignore
+    const results = await Promise.all(
+      list.map(async (b) => {
+        const backend = _deps!.backends.get(b.name);
+        let version: string | null = null;
+        if (backend) {
+          try { version = await backend.getVersion(); } catch { /* ignore */ }
         }
-      }
-      results.push({ ...b, installed: true, version });
-    }
+        return { ...b, installed: true, version };
+      }),
+    );
     res.json(results);
   });
 
@@ -258,7 +255,7 @@ export function setupApiRoutes(app: Express, deps: ApiDeps): void {
   app.post(
     '/api/upload',
     express.json({ limit: '50mb' }),
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       const { files } = req.body as {
         files?: Array<{ name: string; data: string; type?: string }>;
       };
@@ -268,59 +265,37 @@ export function setupApiRoutes(app: Express, deps: ApiDeps): void {
 
       const maxSize = 10 * 1024 * 1024; // 10MB
       const allowedExts = [
-        '.jpg',
-        '.jpeg',
-        '.png',
-        '.gif',
-        '.webp',
-        '.pdf',
-        '.txt',
-        '.md',
-        '.json',
-        '.js',
-        '.ts',
-        '.py',
-        '.sh',
-        '.css',
-        '.html',
+        '.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.txt',
+        '.md', '.json', '.js', '.ts', '.py', '.sh', '.css', '.html',
       ];
-      const results: Array<Record<string, unknown>> = [];
 
+      // Validate all files first (sync), then write in parallel
+      const prepared: Array<{ buffer: Buffer; filename: string; filepath: string; originalName: string; type: string }> = [];
       for (const file of files) {
         if (!file.name || !file.data) continue;
-
-        // Validate extension
         const ext = path.extname(file.name).toLowerCase();
         if (!allowedExts.includes(ext)) {
-          return res
-            .status(400)
-            .json({ error: `File type not allowed: ${ext}` });
+          return res.status(400).json({ error: `File type not allowed: ${ext}` });
         }
-
-        // Decode base64
         const buffer = Buffer.from(file.data, 'base64');
         if (buffer.length > maxSize) {
-          return res
-            .status(400)
-            .json({ error: `File too large: ${file.name} (max 10MB)` });
+          return res.status(400).json({ error: `File too large: ${file.name} (max 10MB)` });
         }
-
-        // Save file
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
         const filename = `upload-${Date.now()}-${safeName}`;
         const filepath = path.join(TMP_DIR, filename);
-        writeFileSync(filepath, buffer);
-
-        results.push({
-          originalName: file.name,
-          filename,
-          filepath,
-          type: file.type || 'application/octet-stream',
-          size: buffer.length,
-        });
+        prepared.push({ buffer, filename, filepath, originalName: file.name, type: file.type || 'application/octet-stream' });
       }
 
-      res.json(results);
+      await Promise.all(prepared.map(f => writeFile(f.filepath, f.buffer)));
+
+      res.json(prepared.map(f => ({
+        originalName: f.originalName,
+        filename: f.filename,
+        filepath: f.filepath,
+        type: f.type,
+        size: f.buffer.length,
+      })));
     },
   );
 
@@ -542,16 +517,11 @@ export function setupApiRoutes(app: Express, deps: ApiDeps): void {
         backend: backend.name,
         meta: { parentId, parentName: parentAgent?.name },
       });
-      // Notify chat adapters about the delegation
-      for (const adapter of adapters) {
-        if (adapter.isReady()) {
-          adapter
-            .send(
-              `🐕‍🦺 [${agentName}] spawned by ${parentAgent?.name}`,
-            )
-            .catch(() => {});
-        }
-      }
+      await Promise.allSettled(
+        adapters
+          .filter(a => a.isReady())
+          .map(a => a.send(`🐕‍🦺 [${agentName}] spawned by ${parentAgent?.name}`)),
+      );
       updatePinnedStatus();
     } else {
       console.log(

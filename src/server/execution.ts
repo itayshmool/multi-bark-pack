@@ -5,6 +5,7 @@
 
 import { errorMessage } from '../utils/error.js';
 import { splitMessage } from '../utils/text.js';
+import { shellEscape } from '../utils/shell.js';
 import { getAgentFiles } from '../utils/agent-files.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -360,7 +361,7 @@ export function executeAgentCommand(
   // Execute in tmux
   try {
     execSync(
-      `tmux send-keys -t "${agent.tmuxSession}" "bash '${files.scriptFile}'" Enter`,
+      `tmux send-keys -t ${shellEscape(agent.tmuxSession)} "bash ${shellEscape(files.scriptFile)}" Enter`,
       EXEC_OPTS,
     );
     _timeline!.emit('message_sent', {

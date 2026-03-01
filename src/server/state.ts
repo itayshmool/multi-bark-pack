@@ -4,9 +4,10 @@
  */
 
 import { errorMessage } from '../utils/error.js';
+import { atomicWriteJSON } from '../utils/atomic-write.js';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import type { Agent, Adapter } from '../types/index.js';
 import {
   AGENTS_FILE,
@@ -20,6 +21,7 @@ import {
 const agents = new Map<string, Agent>();
 const deletedAgents = new Map<string, Agent>();
 const msgToAgent = new Map<string, string>(); // prefixed msg id -> agent id
+const agentsByName = new Map<string, Agent>(); // lowercase name -> agent (active only)
 
 // --- Adapter State ---
 const adapters: Adapter[] = [];
@@ -46,10 +48,17 @@ export function getAgent(id: string): Agent | undefined {
 
 export function setAgent(id: string, agent: Agent): void {
   agents.set(id, agent);
+  agentsByName.set(agent.name.toLowerCase(), agent);
 }
 
 export function deleteAgent(id: string): boolean {
+  const agent = agents.get(id);
+  if (agent) agentsByName.delete(agent.name.toLowerCase());
   return agents.delete(id);
+}
+
+export function getAgentByName(name: string): Agent | undefined {
+  return agentsByName.get(name.toLowerCase());
 }
 
 export function hasAgent(id: string): boolean {
@@ -128,10 +137,17 @@ export function genId(): string {
 
 // --- Agent List with Status ---
 export function getAllAgentsWithStatus(): Array<Agent & { isRunning: boolean }> {
+  let runningSet: Set<string>;
+  try {
+    const files = readdirSync(TMP_DIR);
+    runningSet = new Set(files.filter(f => f.endsWith('.running')));
+  } catch {
+    runningSet = new Set();
+  }
   return [
     ...[...agents.values()].map(a => ({
       ...a,
-      isRunning: existsSync(path.join(TMP_DIR, `${a.id}.running`)),
+      isRunning: runningSet.has(`${a.id}.running`),
     })),
     ...[...deletedAgents.values()].map(a => ({ ...a, isRunning: false })),
   ];
@@ -139,8 +155,10 @@ export function getAllAgentsWithStatus(): Array<Agent & { isRunning: boolean }> 
 
 // --- Persistence ---
 
-export function saveState(): void {
-  // Save agents (both active and deleted)
+const SAVE_DEBOUNCE_MS = 500;
+let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function _flushState(): void {
   const data: Record<string, Record<string, unknown>> = {};
   for (const map of [agents, deletedAgents]) {
     for (const [id, agent] of map) {
@@ -158,23 +176,36 @@ export function saveState(): void {
         cwd: agent.cwd || null,
         deletedAt: agent.deletedAt || null,
         source: agent.source || 'whatsapp',
+        retryCount: agent.retryCount || 0,
       };
     }
   }
-  writeFileSync(AGENTS_FILE, JSON.stringify(data, null, 2));
+  atomicWriteJSON(AGENTS_FILE, data, 'agents');
 
-  // Save routing map
   const routing: Record<string, string> = {};
   for (const [msgId, agentId] of msgToAgent) {
     routing[msgId] = agentId;
   }
-  writeFileSync(ROUTING_FILE, JSON.stringify(routing, null, 2));
+  atomicWriteJSON(ROUTING_FILE, routing, 'routing');
 
-  // Save pinned status message IDs so we can unpin them after restart
-  writeFileSync(STATUS_FILE, JSON.stringify(statusMsgs));
+  atomicWriteJSON(STATUS_FILE, statusMsgs, 'status');
 
-  // Broadcast to UI clients
   if (_broadcastAgents) _broadcastAgents();
+}
+
+/** Debounced save — coalesces rapid calls into a single disk write. */
+export function saveState(): void {
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    _flushState();
+  }, SAVE_DEBOUNCE_MS);
+}
+
+/** Immediate save — for shutdown or when data must be persisted now. */
+export function saveStateNow(): void {
+  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+  _flushState();
 }
 
 export function loadState(): void {
@@ -188,11 +219,11 @@ export function loadState(): void {
         if (!agent.backend) agent.backend = 'claude-code';
         if (!agent.model) agent.model = 'sonnet';
         if (!agent.cwd) agent.cwd = null;
+        if (!agent.retryCount) agent.retryCount = 0;
         if (agent.status === 'active') {
-          // Respect saved hasRun — /reset sets it to false with a new session UUID.
-          // Default to true for backward compat (pre-reset agents without the field).
           if (agent.hasRun === undefined) agent.hasRun = true;
           agents.set(id, agent);
+          agentsByName.set(agent.name.toLowerCase(), agent);
         } else if (agent.status === 'deleted') {
           deletedAgents.set(id, agent);
         }

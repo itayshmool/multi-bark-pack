@@ -5,6 +5,7 @@
 
 import type { Backend, BackendCapabilities, BuildCommandOpts, BuildCommandResult } from '../types/index.js';
 import { isCliInstalled, getCliVersion, BACKEND_METADATA } from './shared.js';
+import { sanitizePath } from './sanitize.js';
 
 const META = BACKEND_METADATA['codex'];
 
@@ -59,10 +60,10 @@ export default function createCodexBackend(_config: Record<string, unknown> = {}
       const modelFlag = model && model !== 'default' ? `-m ${model}` : '';
       const mcpFlag = mcpConfigFile ? `--mcp-config "${mcpConfigFile}"` : '';
 
-      // Build the shell script
-      // Codex doesn't support system prompts via CLI, prepend to prompt if needed
+      const safeCwd = cwd ? sanitizePath(cwd) : null;
+
       let script = '#!/bin/bash\n';
-      if (cwd) script += `cd "${cwd}"\n`;
+      if (safeCwd) script += `cd "${safeCwd}"\n`;
 
       if (isResume && sessionId) {
         // Resume existing session

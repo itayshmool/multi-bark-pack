@@ -6,6 +6,7 @@
 import crypto from 'node:crypto';
 import type { Backend, BackendCapabilities, BuildCommandOpts, BuildCommandResult } from '../types/index.js';
 import { isCliInstalled, getCliVersion, BACKEND_METADATA } from './shared.js';
+import { sanitizePath } from './sanitize.js';
 
 const META = BACKEND_METADATA['claude-code'];
 
@@ -65,9 +66,10 @@ export default function createClaudeCodeBackend(_config: Record<string, unknown>
         ? `--resume ${sessionId} ${modelFlag}`
         : `--session-id ${sessionId} ${modelFlag}${systemPromptArg}`;
 
-      // Build the shell script
+      const safeCwd = cwd ? sanitizePath(cwd) : null;
+
       let script = '#!/bin/bash\n';
-      if (cwd) script += `cd "${cwd}"\n`;
+      if (safeCwd) script += `cd "${safeCwd}"\n`;
       script += `cat "${promptFile}" | claude -p --dangerously-skip-permissions ${claudeArgs} ${mcpFlag} --output-format stream-json --verbose --include-partial-messages 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
 
       return {

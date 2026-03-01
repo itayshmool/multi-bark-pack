@@ -8,6 +8,8 @@ const TRIM_INTERVAL = parseInt(process.env.TIMELINE_TRIM_INTERVAL || '100', 10);
 let events: TimelineEvent[] = [];
 let broadcastFn: ((msg: { type: string; event: TimelineEvent }) => void) | null = null;
 let appendCount = 0;
+const TRIM_DEBOUNCE_MS = 30_000;
+let _trimTimer: ReturnType<typeof setTimeout> | null = null;
 
 interface MessageGeneratorArg {
   agentName: string | null;
@@ -39,6 +41,8 @@ interface InitializeOptions {
 
 export function initialize({ broadcast }: InitializeOptions): void {
   broadcastFn = broadcast;
+  appendCount = 0;
+  if (_trimTimer) { clearTimeout(_trimTimer); _trimTimer = null; }
   events = storage.load();
   if (events.length > MAX_EVENTS) {
     events = events.slice(-MAX_EVENTS);
@@ -78,10 +82,13 @@ export function emit(type: TimelineEventType, { agentId = null, agentName = null
 
   storage.append(event);
   appendCount++;
-  if (appendCount >= TRIM_INTERVAL) {
-    storage.trim(MAX_EVENTS);
-    storage.rotate();
-    appendCount = 0;
+  if (appendCount >= TRIM_INTERVAL && !_trimTimer) {
+    _trimTimer = setTimeout(() => {
+      _trimTimer = null;
+      storage.trim(MAX_EVENTS);
+      storage.rotate();
+      appendCount = 0;
+    }, TRIM_DEBOUNCE_MS);
   }
 
   if (broadcastFn) {

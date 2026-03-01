@@ -110,6 +110,14 @@ describe('classifyFailure', () => {
     expect(classifyFailure('request timeout', 1)?.strategy).toBe('retry');
     expect(classifyFailure('500 error', 1)?.strategy).toBe('switch');
   });
+
+  it('all FAILURE_PATTERNS values are already lowercase (Fix #12)', () => {
+    for (const [type, patterns] of Object.entries(FAILURE_PATTERNS)) {
+      for (const pattern of patterns) {
+        expect(pattern).toBe(pattern.toLowerCase());
+      }
+    }
+  });
 });
 
 describe('isTimedOut', () => {

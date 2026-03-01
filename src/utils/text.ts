@@ -13,6 +13,7 @@ export function truncateMessage(text: string, maxLen: number): string {
  */
 export function splitMessage(text: string, maxLen: number): string[] {
   if (!text) return ['(no output)'];
+  if (maxLen <= 0) return [text];
   if (text.length <= maxLen) return [text];
 
   const chunks: string[] = [];
@@ -25,7 +26,7 @@ export function splitMessage(text: string, maxLen: number): string[] {
     }
 
     const segment = remaining.substring(0, maxLen);
-    const splitAt = findSplitPoint(segment, maxLen);
+    const splitAt = Math.max(1, findSplitPoint(segment, maxLen));
 
     chunks.push(remaining.substring(0, splitAt).trimEnd());
     remaining = remaining.substring(splitAt).trimStart();

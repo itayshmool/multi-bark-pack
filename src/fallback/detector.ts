@@ -4,6 +4,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { shellEscape } from '../utils/shell.js';
 import type { FailureType, FallbackStrategy, FailureInfo } from '../types/index.js';
 
 /**
@@ -152,7 +153,7 @@ export function classifyFailure(output: string, exitCode: string | number | null
 
     for (const [type, patterns] of Object.entries(FAILURE_PATTERNS)) {
       for (const pattern of patterns) {
-        if (outputLower.includes(pattern.toLowerCase())) {
+        if (outputLower.includes(pattern)) {
           return {
             type,
             ...FAILURE_INFO[type],
@@ -175,7 +176,7 @@ export function classifyFailure(output: string, exitCode: string | number | null
  */
 export function isTmuxAlive(tmuxSession: string): boolean {
   try {
-    execSync(`tmux has-session -t "${tmuxSession}" 2>/dev/null`);
+    execSync(`tmux has-session -t ${shellEscape(tmuxSession)} 2>/dev/null`);
     return true;
   } catch {
     return false;

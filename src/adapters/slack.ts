@@ -2,7 +2,8 @@ import { errorMessage } from '../utils/error.js';
 import { truncateMessage } from '../utils/text.js';
 import { WebClient } from '@slack/web-api';
 import { SocketModeClient } from '@slack/socket-mode';
-import { writeFileSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { TMP_DIR } from '../config/paths.js';
 import type {
@@ -38,6 +39,7 @@ export function createSlackAdapter({
   let socketReady = false;
   let botUserId: string | null = null;
   let dmChannelId: string | null = null; // DM channel with owner for status + fallback sends
+  let botMentionRe: RegExp | null = null;
 
   // User name cache to avoid repeated API calls
   const userNameCache = new Map<string, string>();
@@ -69,6 +71,7 @@ export function createSlackAdapter({
       // Validate credentials and get bot user ID
       const authResult = await web.auth.test();
       botUserId = authResult.user_id as string;
+      botMentionRe = new RegExp(`<@${botUserId}>`, 'g');
       console.log(
         `Slack bot: @${authResult.user} (${botUserId})`,
       );
@@ -105,7 +108,7 @@ export function createSlackAdapter({
                 msg &&
                 msg.user === botUserId &&
                 STATUS_PREFIXES.some((p: string) =>
-                  msg.text.startsWith(p),
+                  (msg.text ?? '').startsWith(p),
                 )
               ) {
                 try {
@@ -173,13 +176,8 @@ export function createSlackAdapter({
           // Respond to: DMs, direct @mentions, or thread replies
           if (!isDM && !isMention && !isThreadReply) return;
 
-          // Strip the bot mention from the text
-          // User can write "@bark-pack @Chase do this" to target a specific pup
           const cleanText = text
-            .replace(
-              new RegExp(`<@${botUserId}>`, 'g'),
-              '',
-            )
+            .replace(botMentionRe!, '', )
             .trim();
 
           const sender = await getUserName(event.user);
@@ -247,17 +245,22 @@ export function createSlackAdapter({
         );
         return null;
       }
-      const opts: Record<string, unknown> = {
-        channel: targetChannel,
-        text: truncateMessage(text, SLACK_MAX_MSG_LEN - 3),
-      };
-      if (ts) {
-        opts.thread_ts = ts;
+      try {
+        const opts: Record<string, unknown> = {
+          channel: targetChannel,
+          text: truncateMessage(text, SLACK_MAX_MSG_LEN - 3),
+        };
+        if (ts) {
+          opts.thread_ts = ts;
+        }
+        const result = await web!.chat.postMessage(
+          opts as any,
+        );
+        return packId(targetChannel, result.ts as string);
+      } catch (e: unknown) {
+        console.log(`  ⚠️ Slack send failed: ${errorMessage(e)}`);
+        return null;
       }
-      const result = await web!.chat.postMessage(
-        opts as any,
-      );
-      return packId(targetChannel, result.ts as string);
     },
 
     async sendFile(
@@ -385,7 +388,7 @@ export function createSlackAdapter({
             TMP_DIR,
             `img-${Date.now()}.${ext}`,
           );
-          writeFileSync(downloadPath, buffer);
+          await writeFile(downloadPath, buffer);
           return {
             filePath: downloadPath,
             mimetype: file.mimetype,
@@ -401,7 +404,7 @@ export function createSlackAdapter({
             TMP_DIR,
             `voice-${Date.now()}.${ext}`,
           );
-          writeFileSync(downloadPath, buffer);
+          await writeFile(downloadPath, buffer);
           return {
             filePath: downloadPath,
             mimetype: file.mimetype,

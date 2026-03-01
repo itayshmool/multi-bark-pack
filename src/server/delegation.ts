@@ -3,6 +3,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { shellEscape } from '../utils/shell.js';
 import type { Agent } from '../types/index.js';
 import { EXEC_OPTS, API_SECRET, UI_PORT, TOOLS_DIR } from './config.js';
 import { getAgents } from './state.js';
@@ -16,10 +17,15 @@ export function getActiveSubAgents(parentId: string): Agent[] {
 
 /** Set up BARK_* env vars in a tmux session so the `bark` CLI tool works. */
 export function setupTmuxEnv(tmuxSession: string, agentId: string): void {
+  const escaped = shellEscape(tmuxSession);
   try {
-    const tokenExport = API_SECRET ? ` BARK_TOKEN='${API_SECRET}'` : '';
+    execSync(`tmux setenv -t ${escaped} BARK_AGENT_ID ${shellEscape(agentId)}`, EXEC_OPTS);
+    execSync(`tmux setenv -t ${escaped} BARK_API ${shellEscape(`http://localhost:${UI_PORT}`)}`, EXEC_OPTS);
+    if (API_SECRET) {
+      execSync(`tmux setenv -t ${escaped} BARK_TOKEN ${shellEscape(API_SECRET)}`, EXEC_OPTS);
+    }
     execSync(
-      `tmux send-keys -t "${tmuxSession}" "export BARK_AGENT_ID='${agentId}' BARK_API='http://localhost:${UI_PORT}'${tokenExport} PATH='${TOOLS_DIR}':\\"\\$PATH\\"" Enter`,
+      `tmux send-keys -t ${escaped} ${shellEscape(`export BARK_AGENT_ID=$BARK_AGENT_ID BARK_API=$BARK_API BARK_TOKEN=$BARK_TOKEN PATH=${TOOLS_DIR}:"$PATH"`)} Enter`,
       EXEC_OPTS,
     );
   } catch {

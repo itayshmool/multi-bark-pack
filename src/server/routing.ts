@@ -24,9 +24,11 @@ export function initRouting(deps: {
   _timeline = deps.timeline;
 }
 
+const DEBUG = !!process.env.DEBUG;
+
 export async function onMessage(msg: NormalizedMessage): Promise<void> {
-  console.log(
-    `\n[DEBUG] Message received: sender="${msg.sender}" senderId="${msg.senderId}" text="${msg.text?.substring(0, 50)}"`,
+  if (DEBUG) console.log(
+    `\n[DEBUG] Message received: sender="${msg.sender}" text="${msg.text ? `[${msg.text.length} chars]` : '(empty)'}"`,
   );
   const adapter = msg.adapter;
 

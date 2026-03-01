@@ -3,16 +3,17 @@
  */
 
 import { errorMessage } from '../utils/error.js';
+import { shellEscape } from '../utils/shell.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { exec, execSync } from 'node:child_process';
 import type { Adapter, BackendsProvider } from '../types/index.js';
 import { TMP_DIR, PROJECTS_DIR, EXEC_OPTS, REPO_PATH } from './config.js';
 import { MCP_CONFIG_FILE } from '../config/paths.js';
 import { classifyAgents } from './status.js';
 import { updatePinnedStatus } from './status.js';
-import { createTmuxSession } from './tmux.js';
+import { createTmuxSession, ensureTmuxSession } from './tmux.js';
 
 // Lazily injected dependencies
 let _backends: BackendsProvider | null = null;
@@ -74,6 +75,19 @@ export async function runDaily(adapter: Adapter): Promise<void> {
 
   // Idle/yelp pups: ask for standup via --resume --model haiku (parallel)
   const PUP_TIMEOUT_MS = 40_000;
+
+  interface PendingStandup {
+    agent: { emoji: string; status: string; agent: typeof idle[0]['agent'] };
+    doneFile: string;
+    outFile: string;
+    cleanupFiles: string[];
+    resolve: (msg: string) => void;
+    resolved: boolean;
+    deadline: ReturnType<typeof setTimeout>;
+  }
+
+  const pending: PendingStandup[] = [];
+
   const standupPromises = idle.map(({ emoji, status, agent }) => {
     const project = agent.cwd ? ` [${path.basename(agent.cwd)}]` : '';
     return new Promise<string>(resolve => {
@@ -81,38 +95,24 @@ export async function runDaily(adapter: Adapter): Promise<void> {
       const outFile = path.join(TMP_DIR, `${agent.id}.standup.out`);
       const doneFile = path.join(TMP_DIR, `${agent.id}.standup.done`);
       const progressFile = path.join(TMP_DIR, `${agent.id}.standup.progress`);
-
       const scriptFile = path.join(TMP_DIR, `${agent.id}.standup.sh`);
-      let resolved = false;
-      let poll: ReturnType<typeof setInterval> | null = null;
-      function done(msg: string): void {
-        if (resolved) return;
-        resolved = true;
-        if (poll) clearInterval(poll);
-        clearTimeout(hardDeadline);
-        for (const f of [promptFile, outFile, doneFile, progressFile, scriptFile]) {
-          try {
-            unlinkSync(f);
-          } catch {
-            // ignore
-          }
-        }
+
+      const cleanupFiles = [promptFile, outFile, doneFile, progressFile, scriptFile];
+
+      function finish(msg: string): void {
+        if (entry.resolved) return;
+        entry.resolved = true;
+        clearTimeout(entry.deadline);
+        for (const f of cleanupFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
         resolve(msg);
       }
 
-      for (const f of [outFile, doneFile]) {
-        try {
-          unlinkSync(f);
-        } catch {
-          // ignore
-        }
-      }
+      for (const f of [outFile, doneFile]) { try { unlinkSync(f); } catch { /* ignore */ } }
 
       const standupPrompt =
         'Standup. Answer from memory only — no tool use, no research. Plain text, 3 lines max:\n1. Done: [what you completed]\n2. Next: [what\'s remaining]\n3. Blockers: [any blockers, or "none"]';
       writeFileSync(promptFile, standupPrompt);
 
-      // Build standup command using backend
       const backend =
         _backends!.get(agent.backend) || _backends!.getDefault(agent.backend);
       const __daily_dir = path.dirname(fileURLToPath(import.meta.url));
@@ -121,7 +121,7 @@ export async function runDaily(adapter: Adapter): Promise<void> {
         promptFile,
         sessionId: agent.sessionId,
         isResume: agent.hasRun,
-        model: 'haiku', // Force haiku for quick standups
+        model: 'haiku',
         streamParserScript: displayScript,
         agentId: `${agent.id}.standup`,
         tmpDir: TMP_DIR,
@@ -130,67 +130,64 @@ export async function runDaily(adapter: Adapter): Promise<void> {
       });
       writeFileSync(scriptFile, script, { mode: 0o755 });
 
-      // Hard deadline: resolve no matter what after PUP_TIMEOUT_MS
-      const hardDeadline = setTimeout(() => {
-        console.log(`  ⏰ /daily: ${agent.name} timed out`);
-        done(`${emoji} *${agent.name}*${project} (${status}): _timed out_`);
-      }, PUP_TIMEOUT_MS);
+      const entry: PendingStandup = {
+        agent: { emoji, status, agent },
+        doneFile,
+        outFile,
+        cleanupFiles,
+        resolve,
+        resolved: false,
+        deadline: setTimeout(() => {
+          console.log(`  ⏰ /daily: ${agent.name} timed out`);
+          finish(`${emoji} *${agent.name}*${project} (${status}): _timed out_`);
+        }, PUP_TIMEOUT_MS),
+      };
+      pending.push(entry);
 
-      // Ensure tmux session exists
-      try {
-        execSync(
-          `tmux has-session -t "${agent.tmuxSession}" 2>/dev/null`,
-          EXEC_OPTS,
-        );
-      } catch {
-        try {
-          const startDir =
-            agent.cwd && existsSync(agent.cwd) ? agent.cwd : PROJECTS_DIR;
-          createTmuxSession(agent.tmuxSession, agent.id, { startDir });
-        } catch (e: unknown) {
-          const msg = errorMessage(e);
-          console.log(`  ❌ /daily: couldn't reach ${agent.name}: ${msg}`);
-          done(
-            `${emoji} *${agent.name}*${project} (${status}): _couldn't reach_`,
-          );
-          return;
-        }
-      }
-
-      try {
-        execSync(
-          `tmux send-keys -t "${agent.tmuxSession}" "bash '${scriptFile}'" Enter`,
-          EXEC_OPTS,
-        );
-        console.log(`  📤 /daily: sent standup prompt to ${agent.name}`);
-      } catch (e: unknown) {
-        const msg = errorMessage(e);
-        console.log(`  ❌ /daily: tmux error for ${agent.name}: ${msg}`);
-        done(
-          `${emoji} *${agent.name}*${project} (${status}): _couldn't reach_`,
-        );
+      if (!ensureTmuxSession(agent)) {
+        finish(`${emoji} *${agent.name}*${project} (${status}): _couldn't reach_`);
         return;
       }
 
-      // Poll every second for completion
-      poll = setInterval(() => {
-        if (existsSync(doneFile)) {
-          let output = '';
-          try {
-            output = readFileSync(outFile, 'utf8').trim();
-          } catch {
-            // ignore
+      const sendCmd = `tmux send-keys -t ${shellEscape(agent.tmuxSession)} "bash ${shellEscape(scriptFile)}" Enter`;
+      exec(sendCmd, (err) => {
+        if (err) {
+          console.log(`  ❌ /daily: tmux error for ${agent.name}: ${errorMessage(err)}`);
+          finish(`${emoji} *${agent.name}*${project} (${status}): _couldn't reach_`);
+        } else {
+          console.log(`  📤 /daily: sent standup prompt to ${agent.name}`);
+        }
+      });
+    });
+  });
+
+  // Single shared poller: batch-check all pending pups every second
+  if (pending.length > 0) {
+    await new Promise<void>(resolvePoller => {
+      const sharedPoll = setInterval(() => {
+        let allDone = true;
+        for (const entry of pending) {
+          if (entry.resolved) continue;
+          allDone = false;
+          if (existsSync(entry.doneFile)) {
+            let output = '';
+            try { output = readFileSync(entry.outFile, 'utf8').trim(); } catch { /* ignore */ }
+            const { emoji, agent } = entry.agent;
+            const project = agent.cwd ? ` [${path.basename(agent.cwd)}]` : '';
+            console.log(`  ✅ /daily: ${agent.name} responded (${output.length} chars)`);
+            entry.resolved = true;
+            clearTimeout(entry.deadline);
+            for (const f of entry.cleanupFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
+            entry.resolve(`${emoji} *${agent.name}*${project}:\n${output || '_no response_'}`);
           }
-          console.log(
-            `  ✅ /daily: ${agent.name} responded (${output.length} chars)`,
-          );
-          done(
-            `${emoji} *${agent.name}*${project}:\n${output || '_no response_'}`,
-          );
+        }
+        if (allDone || pending.every(e => e.resolved)) {
+          clearInterval(sharedPoll);
+          resolvePoller();
         }
       }, 1000);
     });
-  });
+  }
 
   const standupResults = await Promise.all(standupPromises);
   lines.push(...standupResults);

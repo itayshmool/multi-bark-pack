@@ -3,8 +3,16 @@
  */
 
 import type { Request, Response, NextFunction, Express } from 'express';
+import crypto from 'node:crypto';
 import express from 'express';
 import { API_SECRET } from './config.js';
+
+/** Derive a session token from the API secret (never store raw secret in cookies). */
+export function deriveSessionToken(secret: string): string {
+  return crypto.createHmac('sha256', secret).update('bark-session').digest('hex');
+}
+
+const SESSION_TOKEN = API_SECRET ? deriveSessionToken(API_SECRET) : null;
 
 /** Parse a cookie value by name from request headers. */
 export function parseCookie(req: Request, name: string): string | null {
@@ -22,10 +30,12 @@ export function isAuthenticated(req: Request | { headers?: Record<string, string
   const headers = req.headers as Record<string, string | undefined>;
   const bearer = headers?.authorization?.replace(/^Bearer\s+/i, '');
   if (bearer === API_SECRET) return true;
+  if (bearer === SESSION_TOKEN) return true;
   const cookie =
     typeof req === 'object' && headers
       ? parseCookie(req as Request, 'bark_token')
       : null;
+  if (cookie === SESSION_TOKEN) return true;
   if (cookie === API_SECRET) return true;
   return false;
 }
@@ -75,9 +85,12 @@ if (p.get('error')) document.getElementById('err').style.display = 'block';
     express.urlencoded({ extended: false }),
     (req: Request, res: Response) => {
       if ((req.body as Record<string, string>)?.secret === API_SECRET) {
-        res.cookie('bark_token', API_SECRET!, {
+        const host = req.headers.host || '';
+        const isLocalhost = host.startsWith('localhost') || host.startsWith('127.0.0.1');
+        res.cookie('bark_token', SESSION_TOKEN!, {
           httpOnly: true,
           sameSite: 'lax',
+          secure: !isLocalhost,
           path: '/',
           maxAge: 30 * 24 * 60 * 60 * 1000,
         });
@@ -96,10 +109,8 @@ if (p.get('error')) document.getElementById('err').style.display = 'block';
   // Protect static UI — redirect to login if not authenticated
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (!API_SECRET) return next();
-    // Allow login-related paths and static assets (favicon, fonts, etc.)
     if (req.path === '/login' || req.path === '/favicon.svg') return next();
     if (isAuthenticated(req)) return next();
-    // API calls get 401, browser requests get redirected
     if (req.path.startsWith('/api')) {
       return res.status(401).json({ error: 'Unauthorized' });
     }

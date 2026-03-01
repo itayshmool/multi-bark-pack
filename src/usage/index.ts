@@ -32,7 +32,6 @@ export function record(agentId: string, agentName: string, backend: string, usag
   const outputTokens = usageData.usage?.output_tokens || 0;
   let estimated = false;
 
-  // Estimate cost when backend doesn't report it directly
   if (!costUsd && usageData.usage) {
     const est = estimateCost(backend, usageData.usage);
     if (est) {
@@ -62,7 +61,6 @@ export function record(agentId: string, agentName: string, backend: string, usag
   agent.turns++;
   agent.lastSeen = now;
   if (estimated) agent.estimated = true;
-  // Keep name/backend in sync
   agent.name = agentName;
   agent.backend = backend;
 
@@ -89,7 +87,6 @@ export function removeAgent(agentId: string): void {
   const agent = data.agents[agentId];
   if (!agent) return;
 
-  // Subtract from totals
   data.totals.costUsd -= agent.totalCostUsd;
   data.totals.inputTokens -= agent.totalInputTokens;
   data.totals.outputTokens -= agent.totalOutputTokens;

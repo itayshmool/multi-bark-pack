@@ -1,5 +1,6 @@
 import { errorMessage } from '../utils/error.js';
-import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, renameSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, renameSync, statSync } from 'node:fs';
+import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { TMP_DIR } from '../config/paths.js';
 import type { TimelineEvent } from '../types/index.js';
@@ -31,12 +32,9 @@ export function load(): TimelineEvent[] {
 }
 
 export function append(event: TimelineEvent): void {
-  try {
-    appendFileSync(TIMELINE_FILE, JSON.stringify(event) + '\n');
-  } catch (err) {
-    const message = errorMessage(err);
-    console.log(`  ⚠️ Could not append timeline event: ${message}`);
-  }
+  appendFile(TIMELINE_FILE, JSON.stringify(event) + '\n').catch(err => {
+    console.log(`  ⚠️ Could not append timeline event: ${errorMessage(err)}`);
+  });
 }
 
 export function rotate(): void {

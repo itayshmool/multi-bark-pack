@@ -1,6 +1,7 @@
 import { errorMessage } from '../utils/error.js';
 import { truncateMessage } from '../utils/text.js';
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { TMP_DIR } from '../config/paths.js';
 import type {
@@ -334,7 +335,7 @@ export function createTelegramAdapter({
           new Blob([readFileSync(filePath)]),
           path.basename(filePath),
         );
-        if (caption) form.append('caption', caption);
+        if (caption) form.append('caption', caption.length > 1024 ? caption.substring(0, 1021) + '...' : caption);
         if (replyToId)
           form.append(
             'reply_to_message_id',
@@ -478,7 +479,7 @@ export function createTelegramAdapter({
             TMP_DIR,
             `img-${Date.now()}.${ext}`,
           );
-          writeFileSync(downloadPath, buffer);
+          await writeFile(downloadPath, buffer);
           return {
             filePath: downloadPath,
             mimetype: `image/${ext === 'png' ? 'png' : 'jpeg'}`,
@@ -492,7 +493,7 @@ export function createTelegramAdapter({
             TMP_DIR,
             `voice-${Date.now()}${ext}`,
           );
-          writeFileSync(downloadPath, buffer);
+          await writeFile(downloadPath, buffer);
           const mimeMap: Record<string, string> = {
             '.ogg': 'audio/ogg',
             '.mp3': 'audio/mpeg',

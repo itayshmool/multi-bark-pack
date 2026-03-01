@@ -7,11 +7,18 @@ import { execSync } from 'node:child_process';
 
 export const BACKEND_EXEC_OPTS = { encoding: 'utf8' as const, timeout: 10000 };
 
+const _installedCache = new Map<string, boolean>();
+
 export function isCliInstalled(cli: string): boolean {
+  const cached = _installedCache.get(cli);
+  if (cached !== undefined) return cached;
+
   try {
     execSync(`which ${cli}`, BACKEND_EXEC_OPTS);
+    _installedCache.set(cli, true);
     return true;
   } catch {
+    _installedCache.set(cli, false);
     return false;
   }
 }
@@ -22,6 +29,11 @@ export function getCliVersion(versionCmd: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Clear the CLI installed cache (for testing). */
+export function clearCliCache(): void {
+  _installedCache.clear();
 }
 
 export interface BackendMeta {

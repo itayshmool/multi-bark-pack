@@ -388,4 +388,17 @@ describe('routing - onMessage', () => {
       expect(mockSpawnAgent).toHaveBeenCalled();
     });
   });
+
+  describe('debug logging (Fix #17)', () => {
+    it('does not log DEBUG messages when process.env.DEBUG is unset', async () => {
+      const logSpy = vi.spyOn(console, 'log');
+      const msg = createMockMessage({ text: 'test' });
+      await onMessage(msg);
+      const debugCalls = logSpy.mock.calls.filter(
+        c => typeof c[0] === 'string' && c[0].includes('[DEBUG]'),
+      );
+      expect(debugCalls).toHaveLength(0);
+      logSpy.mockRestore();
+    });
+  });
 });

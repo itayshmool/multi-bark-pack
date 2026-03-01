@@ -3,6 +3,8 @@
  */
 
 import { errorMessage } from '../utils/error.js';
+import { shellEscape } from '../utils/shell.js';
+import { withLock } from '../utils/async-lock.js';
 import path from 'node:path';
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -20,6 +22,7 @@ import {
   getAgents,
   getDeletedAgents,
   getAgent,
+  getAgentByName,
   setAgent,
   deleteAgent as removeAgentFromMap,
   setDeletedAgent,
@@ -145,7 +148,8 @@ export async function spawnAgent(
   _historyManager!.addUserTurn(id, prompt);
 
   // Run first prompt, pass the live message ID for editing
-  runAgentCommand(agent, prompt, adapter, liveMsgId, replyToId);
+  // Per-agent lock ensures only one command runs at a time
+  withLock(`agent:${agent.id}`, () => runAgentCommand(agent, prompt, adapter, liveMsgId, replyToId));
 
   return agent;
 }
@@ -192,7 +196,7 @@ export async function sendToAgent(
   // Save user turn to history
   _historyManager!.addUserTurn(agent.id, text);
 
-  runAgentCommand(agent, text, adapter, liveMsgId, replyToId);
+  withLock(`agent:${agent.id}`, () => runAgentCommand(agent, text, adapter, liveMsgId, replyToId));
   await updatePinnedStatus();
 }
 
@@ -302,14 +306,12 @@ export function runAgentCommand(
 }
 
 export function findAgentByName(nameQuery: string): Agent | null {
-  const q = nameQuery.toLowerCase();
-  const agents = getAgents();
-  for (const [, agent] of agents) {
-    if (agent.name.toLowerCase() === q || agent.id === q) {
-      return agent;
-    }
-  }
-  return null;
+  // O(1) lookup via name index
+  const byName = getAgentByName(nameQuery);
+  if (byName) return byName;
+  // Fallback: check by ID
+  const byId = getAgent(nameQuery);
+  return byId ?? null;
 }
 
 export function findDeletedByName(nameQuery: string): Agent | null {
@@ -330,13 +332,13 @@ export function findDeletedByName(nameQuery: string): Agent | null {
 export function softDeleteAgent(agent: Agent): void {
   // Kill tmux session
   try {
-    execSync(`tmux kill-session -t "${agent.tmuxSession}" 2>/dev/null`, EXEC_OPTS);
+    execSync(`tmux kill-session -t ${shellEscape(agent.tmuxSession)} 2>/dev/null`, EXEC_OPTS);
   } catch {
     // ignore
   }
   // Clean up temp files
   try {
-    execSync(`rm -f "${path.join(TMP_DIR, agent.id)}".*`, EXEC_OPTS);
+    execSync(`rm -f ${shellEscape(path.join(TMP_DIR, agent.id))}.*`, EXEC_OPTS);
   } catch {
     // ignore
   }
@@ -360,14 +362,14 @@ export function hardDeleteAgent(
 ): void {
   // Kill tmux session
   try {
-    execSync(`tmux kill-session -t "${agent.tmuxSession}" 2>/dev/null`, EXEC_OPTS);
+    execSync(`tmux kill-session -t ${shellEscape(agent.tmuxSession)} 2>/dev/null`, EXEC_OPTS);
   } catch {
     // ignore
   }
   // Clean up temp files and history
   _historyManager!.remove(agent.id);
   try {
-    execSync(`rm -f "${path.join(TMP_DIR, agent.id)}".*`, EXEC_OPTS);
+    execSync(`rm -f ${shellEscape(path.join(TMP_DIR, agent.id))}.*`, EXEC_OPTS);
   } catch {
     // ignore
   }
@@ -389,48 +391,32 @@ export function hardDeleteAgent(
 
 // --- Extracted command functions (shared by chat commands + REST API) ---
 
+function resolveAgentNames(names: string[]): { agents: Agent[]; notFound: string[] } {
+  if (names.length === 1 && names[0].toLowerCase() === 'pack') {
+    return { agents: [...getAgents().values()], notFound: [] };
+  }
+  const agents: Agent[] = [];
+  const notFound: string[] = [];
+  for (const name of names) {
+    const agent = findAgentByName(name);
+    if (agent) agents.push(agent);
+    else notFound.push(name);
+  }
+  return { agents, notFound };
+}
+
 export function stopAgents(
   names: string[],
 ): { stopped: string[]; notFound: string[] } {
+  const { agents: resolved, notFound } = resolveAgentNames(names);
   const stopped: string[] = [];
-  const notFound: string[] = [];
 
-  if (names.length === 1 && names[0].toLowerCase() === 'pack') {
-    const agents = getAgents();
-    for (const [, agent] of agents) {
-      const runningFile = path.join(TMP_DIR, `${agent.id}.running`);
-      if (existsSync(runningFile)) {
-        try {
-          execSync(`tmux send-keys -t "${agent.tmuxSession}" C-c`, EXEC_OPTS);
-        } catch {
-          // ignore
-        }
-        try {
-          unlinkSync(runningFile);
-        } catch {
-          // ignore
-        }
-        stopped.push(agent.name);
-      }
-    }
-  } else {
-    for (const name of names) {
-      const agent = findAgentByName(name);
-      if (agent) {
-        try {
-          execSync(`tmux send-keys -t "${agent.tmuxSession}" C-c`, EXEC_OPTS);
-        } catch {
-          // ignore
-        }
-        try {
-          unlinkSync(path.join(TMP_DIR, `${agent.id}.running`));
-        } catch {
-          // ignore
-        }
-        stopped.push(agent.name);
-      } else {
-        notFound.push(name);
-      }
+  for (const agent of resolved) {
+    const runningFile = path.join(TMP_DIR, `${agent.id}.running`);
+    if (existsSync(runningFile)) {
+      try { execSync(`tmux send-keys -t ${shellEscape(agent.tmuxSession)} C-c`, EXEC_OPTS); } catch { /* ignore */ }
+      try { unlinkSync(runningFile); } catch { /* ignore */ }
+      stopped.push(agent.name);
     }
   }
 
@@ -445,25 +431,12 @@ export function stopAgents(
 export function clearAgents(
   names: string[],
 ): { cleared: string[]; notFound: string[] } {
+  const { agents: resolved, notFound } = resolveAgentNames(names);
   const cleared: string[] = [];
-  const notFound: string[] = [];
 
-  if (names.length === 1 && names[0].toLowerCase() === 'pack') {
-    const allAgents = [...getAgents().values()];
-    for (const agent of allAgents) {
-      cleared.push(agent.name);
-      softDeleteAgent(agent);
-    }
-  } else {
-    for (const name of names) {
-      const agent = findAgentByName(name);
-      if (agent) {
-        cleared.push(agent.name);
-        softDeleteAgent(agent);
-      } else {
-        notFound.push(name);
-      }
-    }
+  for (const agent of resolved) {
+    cleared.push(agent.name);
+    softDeleteAgent(agent);
   }
 
   updatePinnedStatus();
@@ -475,23 +448,19 @@ export function deleteAgents(
 ): { deleted: string[]; deletedFromLosts: string[]; notFound: string[] } {
   const deleted: string[] = [];
   const deletedFromLosts: string[] = [];
-  const notFound: string[] = [];
 
   if (names.length === 1 && names[0].toLowerCase() === 'pack') {
-    // Hard-delete all active + all losts
-    const agents = getAgents();
-    const deletedAgents = getDeletedAgents();
-    for (const agent of [...agents.values()]) {
+    for (const agent of [...getAgents().values()]) {
       deleted.push(agent.name);
-      hardDeleteAgent(agent, agents);
+      hardDeleteAgent(agent, getAgents());
     }
-    for (const agent of [...deletedAgents.values()]) {
+    for (const agent of [...getDeletedAgents().values()]) {
       deletedFromLosts.push(agent.name);
-      hardDeleteAgent(agent, deletedAgents);
+      hardDeleteAgent(agent, getDeletedAgents());
     }
   } else {
+    const notFound: string[] = [];
     for (const name of names) {
-      // Check active first, then losts
       const agent = findAgentByName(name);
       if (agent) {
         deleted.push(agent.name);
@@ -506,10 +475,12 @@ export function deleteAgents(
         }
       }
     }
+    updatePinnedStatus();
+    return { deleted, deletedFromLosts, notFound };
   }
 
   updatePinnedStatus();
-  return { deleted, deletedFromLosts, notFound };
+  return { deleted, deletedFromLosts, notFound: [] };
 }
 
 export function rebornAgent(
@@ -564,60 +535,26 @@ export function rebornAgent(
 export function resetAgents(
   names: string[],
 ): { reset: string[]; notFound: string[] } {
+  const { agents: resolved, notFound } = resolveAgentNames(names);
   const reset: string[] = [];
-  const notFound: string[] = [];
 
-  if (names.length === 1 && names[0].toLowerCase() === 'pack') {
-    const agents = getAgents();
-    for (const [, agent] of agents) {
-      const backend =
-        _backends!.get(agent.backend) || _backends!.getDefault(DEFAULT_BACKEND);
-      agent.sessionId = backend.generateSessionId();
-      agent.hasRun = false;
-      agent.cwd = null;
-      _historyManager!.clear(agent.id);
-      try {
-        execSync(`rm -f "${path.join(TMP_DIR, agent.id)}".*`, EXEC_OPTS);
-      } catch {
-        // ignore
-      }
-      console.log(`  🔄 Reset ${agent.name} — new session ${agent.sessionId}`);
-      _timeline!.emit('reset', {
-        agentId: agent.id,
-        agentName: agent.name,
-        backend: agent.backend,
-      });
-      reset.push(agent.name);
-    }
-    saveState();
-  } else {
-    for (const name of names) {
-      const agent = findAgentByName(name);
-      if (agent) {
-        const backend =
-          _backends!.get(agent.backend) || _backends!.getDefault(DEFAULT_BACKEND);
-        agent.sessionId = backend.generateSessionId();
-        agent.hasRun = false;
-        agent.cwd = null;
-        _historyManager!.clear(agent.id);
-        try {
-          execSync(`rm -f "${path.join(TMP_DIR, agent.id)}".*`, EXEC_OPTS);
-        } catch {
-          // ignore
-        }
-        console.log(`  🔄 Reset ${agent.name} — new session ${agent.sessionId}`);
-        _timeline!.emit('reset', {
-          agentId: agent.id,
-          agentName: agent.name,
-          backend: agent.backend,
-        });
-        reset.push(agent.name);
-      } else {
-        notFound.push(name);
-      }
-    }
-    saveState();
+  for (const agent of resolved) {
+    const backend =
+      _backends!.get(agent.backend) || _backends!.getDefault(DEFAULT_BACKEND);
+    agent.sessionId = backend.generateSessionId();
+    agent.hasRun = false;
+    agent.cwd = null;
+    _historyManager!.clear(agent.id);
+    try { execSync(`rm -f ${shellEscape(path.join(TMP_DIR, agent.id))}.*`, EXEC_OPTS); } catch { /* ignore */ }
+    console.log(`  🔄 Reset ${agent.name} — new session ${agent.sessionId}`);
+    _timeline!.emit('reset', {
+      agentId: agent.id,
+      agentName: agent.name,
+      backend: agent.backend,
+    });
+    reset.push(agent.name);
   }
+  saveState();
 
   updatePinnedStatus();
   return { reset, notFound };

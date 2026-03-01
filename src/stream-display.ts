@@ -27,6 +27,8 @@ let progressText = '';
 const tools: string[] = [];
 let lastWrite = 0;
 const startTime = Date.now();
+const MAX_FULL_TEXT = 512 * 1024;   // 512KB — keep tail for final output
+const MAX_PROGRESS_TEXT = 8 * 1024; // 8KB — only used for thinking preview
 // Tunable via env (set in the tmux session by the backend's buildCommand)
 const THROTTLE_MS = parseInt(process.env.STREAM_THROTTLE_MS || '800', 10);
 const THINKING_PREVIEW_LEN = parseInt(process.env.STREAM_THINKING_PREVIEW_LEN || '200', 10);
@@ -65,6 +67,11 @@ function buildStatus(): string {
 
   lines.push(`⏱ ${elapsed}`);
   return lines.join('\n');
+}
+
+function capBuffers(): void {
+  if (fullText.length > MAX_FULL_TEXT) fullText = fullText.slice(-MAX_FULL_TEXT);
+  if (progressText.length > MAX_PROGRESS_TEXT) progressText = progressText.slice(-MAX_PROGRESS_TEXT);
 }
 
 function writeProgress(): void {
@@ -304,6 +311,8 @@ process.stdin.on('data', (chunk: string) => {
       // skip
     }
   }
+
+  capBuffers();
 
   // Throttled progress updates
   if (Date.now() - lastWrite > THROTTLE_MS) {

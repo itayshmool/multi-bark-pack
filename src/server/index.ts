@@ -8,6 +8,7 @@ import { execSync } from 'node:child_process';
 import { unlinkSync } from 'node:fs';
 import http from 'node:http';
 import express from 'express';
+import { shellEscape } from '../utils/shell.js';
 
 import { createWhatsAppAdapter } from '../adapters/whatsapp.js';
 import { createTelegramAdapter } from '../adapters/telegram.js';
@@ -49,6 +50,7 @@ import {
   setStatusMsg,
   isShuttingDown,
   setShuttingDown,
+  saveStateNow,
   initState,
 } from './state.js';
 import { loadPacks, getActivePack } from './naming.js';
@@ -161,7 +163,7 @@ process.on('SIGINT', async () => {
     if (agent.tmuxSession) {
       try {
         execSync(
-          `tmux kill-session -t "${agent.tmuxSession}" 2>/dev/null`,
+          `tmux kill-session -t ${shellEscape(agent.tmuxSession)} 2>/dev/null`,
           EXEC_OPTS,
         );
       } catch {
@@ -169,6 +171,8 @@ process.on('SIGINT', async () => {
       }
     }
   }
+
+  saveStateNow();
 
   // Send goodbye on all adapters then destroy
   for (const adapter of getAdapters()) {
@@ -214,6 +218,20 @@ async function main(): Promise<void> {
 
   // Initialize activity timeline
   timeline.initialize({ broadcast: broadcastToWS });
+
+  // Security warnings at startup
+  for (const [platform, owners] of Object.entries(OWNER_IDS)) {
+    if (owners === 'DANGER-ALL') {
+      console.log(
+        `  🚨 WARNING: ${platform} owner is set to DANGER-ALL — any sender can control agents!`,
+      );
+    }
+  }
+  if (!API_SECRET) {
+    console.log(
+      `  🚨 WARNING: API_SECRET not set — API and WebSocket are open to all. Set API_SECRET in .env.`,
+    );
+  }
 
   // Start Management UI HTTP server immediately (before adapters)
   httpServer.listen(UI_PORT, () => {

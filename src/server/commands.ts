@@ -2,7 +2,7 @@
  * Chat command handler — processes all /commands from adapters.
  */
 
-import type { Adapter, NormalizedMessage, BackendsProvider, SkillsManagerProvider, UsageTrackerProvider } from '../types/index.js';
+import type { Agent, Adapter, NormalizedMessage, BackendsProvider, SkillsManagerProvider, UsageTrackerProvider } from '../types/index.js';
 import { getAgents, getDeletedAgents, getMsgAgent, saveState } from './state.js';
 import {
   findAgentByName,
@@ -20,9 +20,10 @@ import { sanitizeName } from './naming.js';
 import { timeSince } from './status.js';
 import { updatePinnedStatus } from './status.js';
 import { parseMessageTags } from '../utils/tags.js';
+import { shellEscape } from '../utils/shell.js';
 import { runDaily } from './daily.js';
 import { EXEC_OPTS } from './config.js';
-import { execSync } from 'node:child_process';
+import { exec, execSync } from 'node:child_process';
 
 // Lazily injected dependencies
 let _backends: BackendsProvider | null = null;
@@ -315,78 +316,41 @@ export async function handleCommand(
   }
 
   if (command === '/stop') {
-    const names = body
-      .split(/\s+/)
-      .slice(1)
-      .map(n => n.replace(/^@/, ''));
-
+    const names = body.split(/\s+/).slice(1).map(n => n.replace(/^@/, ''));
     if (names.length === 0 && msg.isQuotedReply) {
-      const quoted = await adapter.getQuotedMessage(msg.raw);
-      if (!quoted) {
-        await adapter.send('Could not find quoted message.');
-        return true;
-      }
-      const agentId = getMsgAgent(quoted.id);
-      const agent = agentId ? getAgents().get(agentId) : undefined;
-      if (!agent) {
-        await adapter.send('No agent found for that message.');
-        return true;
-      }
+      const agent = await resolveAgentFromReply(msg, adapter);
+      if (agent === null) return true;
       stopAgents([agent.name]);
       await adapter.send(`🛑 *${agent.name}* stopped.`);
       return true;
     }
-
     if (names.length === 0) {
-      await adapter.send(
-        'Usage: `/stop name` or `/stop pack` or reply to a message with `/stop`',
-      );
+      await adapter.send('Usage: `/stop name` or `/stop pack` or reply to a message with `/stop`');
       return true;
     }
-
     const { stopped, notFound } = stopAgents(names);
     let response = '';
     if (stopped.length) response += `🛑 Stopped: *${stopped.join('*, *')}*`;
     else if (names[0].toLowerCase() === 'pack') response = 'No pups are running.';
-    if (notFound.length)
-      response += `${stopped.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
+    if (notFound.length) response += `${stopped.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
     await adapter.send(response);
     return true;
   }
 
   if (command === '/clear') {
-    const names = body
-      .split(/\s+/)
-      .slice(1)
-      .map(n => n.replace(/^@/, ''));
-
+    const names = body.split(/\s+/).slice(1).map(n => n.replace(/^@/, ''));
     if (names.length === 0 && msg.isQuotedReply) {
-      const quoted = await adapter.getQuotedMessage(msg.raw);
-      if (!quoted) {
-        await adapter.send('Could not find quoted message.');
-        return true;
-      }
-      const agentId = getMsgAgent(quoted.id);
-      const agent = agentId ? getAgents().get(agentId) : undefined;
-      if (!agent) {
-        await adapter.send('No agent found for that message.');
-        return true;
-      }
+      const agent = await resolveAgentFromReply(msg, adapter);
+      if (agent === null) return true;
       const agentName = agent.name;
       clearAgents([agent.name]);
-      await adapter.send(
-        `🧹 *${agentName}* shelved.\nUse \`/reborn ${agentName}\` to bring back.`,
-      );
+      await adapter.send(`🧹 *${agentName}* shelved.\nUse \`/reborn ${agentName}\` to bring back.`);
       return true;
     }
-
     if (names.length === 0) {
-      await adapter.send(
-        'Usage: /clear name1 name2 ... or /clear pack or reply to a message with /clear',
-      );
+      await adapter.send('Usage: /clear name1 name2 ... or /clear pack or reply to a message with /clear');
       return true;
     }
-
     const { cleared, notFound } = clearAgents(names);
     let response = '';
     if (cleared.length) {
@@ -395,45 +359,25 @@ export async function handleCommand(
         ? `🧹 Entire pack shelved: *${cleared.join('*, *')}*\nUse \`/losts\` to see them, \`/reborn name\` to bring back.`
         : `🧹 Shelved: *${cleared.join('*, *')}*`;
     }
-    if (notFound.length)
-      response += `${cleared.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
+    if (notFound.length) response += `${cleared.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
     await adapter.send(response);
     return true;
   }
 
   if (command === '/delete') {
-    const names = body
-      .split(/\s+/)
-      .slice(1)
-      .map(n => n.replace(/^@/, ''));
-
+    const names = body.split(/\s+/).slice(1).map(n => n.replace(/^@/, ''));
     if (names.length === 0 && msg.isQuotedReply) {
-      const quoted = await adapter.getQuotedMessage(msg.raw);
-      if (!quoted) {
-        await adapter.send('Could not find quoted message.');
-        return true;
-      }
-      const agentId = getMsgAgent(quoted.id);
-      const agent = agentId
-        ? getAgents().get(agentId) || getDeletedAgents().get(agentId)
-        : undefined;
-      if (!agent) {
-        await adapter.send('No agent found for that message.');
-        return true;
-      }
+      const agent = await resolveAgentFromReply(msg, adapter, true);
+      if (agent === null) return true;
       const agentName = agent.name;
       deleteAgents([agent.name]);
       await adapter.send(`❌ *${agentName}* permanently deleted. Name freed.`);
       return true;
     }
-
     if (names.length === 0) {
-      await adapter.send(
-        'Usage: /delete name1 name2 ... or /delete pack or reply to a message with /delete',
-      );
+      await adapter.send('Usage: /delete name1 name2 ... or /delete pack or reply to a message with /delete');
       return true;
     }
-
     const { deleted, deletedFromLosts, notFound } = deleteAgents(names);
     const allDeleted = [...deleted, ...deletedFromLosts];
     let response = '';
@@ -442,51 +386,30 @@ export async function handleCommand(
       if (isPack) {
         const parts: string[] = [];
         if (deleted.length) parts.push(`${deleted.length} active`);
-        if (deletedFromLosts.length)
-          parts.push(`${deletedFromLosts.length} shelved`);
+        if (deletedFromLosts.length) parts.push(`${deletedFromLosts.length} shelved`);
         response = `❌ Entire pack permanently deleted (${parts.join(' + ')}). All names freed.`;
       } else {
         response = `❌ Permanently deleted: *${allDeleted.join('*, *')}*`;
       }
     }
-    if (notFound.length)
-      response += `${allDeleted.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
+    if (notFound.length) response += `${allDeleted.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
     await adapter.send(response);
     return true;
   }
 
   if (command === '/reset') {
-    const names = body
-      .split(/\s+/)
-      .slice(1)
-      .map(n => n.replace(/^@/, ''));
-
+    const names = body.split(/\s+/).slice(1).map(n => n.replace(/^@/, ''));
     if (names.length === 0 && msg.isQuotedReply) {
-      const quoted = await adapter.getQuotedMessage(msg.raw);
-      if (!quoted) {
-        await adapter.send('Could not find quoted message.');
-        return true;
-      }
-      const agentId = getMsgAgent(quoted.id);
-      const agent = agentId ? getAgents().get(agentId) : undefined;
-      if (!agent) {
-        await adapter.send('No agent found for that message.');
-        return true;
-      }
+      const agent = await resolveAgentFromReply(msg, adapter);
+      if (agent === null) return true;
       resetAgents([agent.name]);
-      await adapter.send(
-        `🔄 *${agent.name}* memory wiped. Next message starts fresh.`,
-      );
+      await adapter.send(`🔄 *${agent.name}* memory wiped. Next message starts fresh.`);
       return true;
     }
-
     if (names.length === 0) {
-      await adapter.send(
-        'Usage: /reset name1 name2 ... or /reset pack or reply to a message with /reset',
-      );
+      await adapter.send('Usage: /reset name1 name2 ... or /reset pack or reply to a message with /reset');
       return true;
     }
-
     const { reset, notFound } = resetAgents(names);
     let response = '';
     if (reset.length) {
@@ -495,8 +418,7 @@ export async function handleCommand(
         ? `🔄 Entire pack reset: *${reset.join('*, *')}*\nAll pups start fresh on next message.`
         : `🔄 Reset: *${reset.join('*, *')}*`;
     }
-    if (notFound.length)
-      response += `${reset.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
+    if (notFound.length) response += `${reset.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
     await adapter.send(response);
     return true;
   }
@@ -602,27 +524,14 @@ export async function handleCommand(
   }
 
   if (command === '/shutdown') {
-    const agents = getAgents();
     await adapter.send('🌙 Pack going offline. Goodnight.');
     console.log(`  🌙 Shutdown requested via ${adapter.name}`);
-    for (const [, agent] of agents) {
-      if (agent.tmuxSession) {
-        try {
-          execSync(
-            `tmux kill-session -t "${agent.tmuxSession}" 2>/dev/null`,
-            EXEC_OPTS,
-          );
-        } catch {
-          // ignore
-        }
-      }
-    }
+    await killAllTmuxSessions();
     await _destroyAllAdapters!();
     process.exit(2); // non-zero = scripts/start.sh does NOT restart
   }
 
   if (command === '/restart') {
-    const agents = getAgents();
     const restartMessages = [
       '🐾 Quick shake...',
       '💤 Pup nap, brb',
@@ -633,23 +542,43 @@ export async function handleCommand(
       restartMessages[Math.floor(Math.random() * restartMessages.length)],
     );
     console.log(`  🔄 Restart requested via ${adapter.name}`);
-    // Kill tmux sessions, then exit cleanly (scripts/start.sh will restart)
-    for (const [, agent] of agents) {
-      if (agent.tmuxSession) {
-        try {
-          execSync(
-            `tmux kill-session -t "${agent.tmuxSession}" 2>/dev/null`,
-            EXEC_OPTS,
-          );
-        } catch {
-          // ignore
-        }
-      }
-    }
+    await killAllTmuxSessions();
     await _destroyAllAdapters!();
     process.exit(0);
   }
 
   // Unknown command — fall through to routing
   return false;
+}
+
+async function resolveAgentFromReply(
+  msg: NormalizedMessage,
+  adapter: Adapter,
+  includeDeleted = false,
+): Promise<Agent | null> {
+  const quoted = await adapter.getQuotedMessage(msg.raw);
+  if (!quoted) {
+    await adapter.send('Could not find quoted message.');
+    return null;
+  }
+  const agentId = getMsgAgent(quoted.id);
+  const agent = agentId
+    ? getAgents().get(agentId) || (includeDeleted ? getDeletedAgents().get(agentId) : undefined)
+    : undefined;
+  if (!agent) {
+    await adapter.send('No agent found for that message.');
+    return null;
+  }
+  return agent;
+}
+
+function killAllTmuxSessions(): Promise<void[]> {
+  const agents = getAgents();
+  return Promise.all(
+    [...agents.values()]
+      .filter(a => a.tmuxSession)
+      .map(a => new Promise<void>(resolve => {
+        exec(`tmux kill-session -t ${shellEscape(a.tmuxSession)} 2>/dev/null`, () => resolve());
+      })),
+  );
 }

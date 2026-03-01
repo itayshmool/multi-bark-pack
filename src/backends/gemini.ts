@@ -5,6 +5,7 @@
 
 import type { Backend, BackendCapabilities, BuildCommandOpts, BuildCommandResult } from '../types/index.js';
 import { isCliInstalled, getCliVersion, BACKEND_METADATA } from './shared.js';
+import { sanitizePath } from './sanitize.js';
 
 const META = BACKEND_METADATA['gemini'];
 
@@ -58,10 +59,10 @@ export default function createGeminiBackend(_config: Record<string, unknown> = {
 
       const modelFlag = model ? `-m ${model}` : '';
 
-      // Build the shell script
-      // Gemini doesn't support system prompts via CLI, prepend to prompt if needed
+      const safeCwd = cwd ? sanitizePath(cwd) : null;
+
       let script = '#!/bin/bash\n';
-      if (cwd) script += `cd "${cwd}"\n`;
+      if (safeCwd) script += `cd "${safeCwd}"\n`;
       // Pass through GEMINI_API_KEY if set in server environment
       if (process.env.GEMINI_API_KEY) {
         script += `export GEMINI_API_KEY="${process.env.GEMINI_API_KEY}"\n`;

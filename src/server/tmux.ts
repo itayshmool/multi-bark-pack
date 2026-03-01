@@ -3,6 +3,7 @@
  */
 
 import { errorMessage } from '../utils/error.js';
+import { shellEscape } from '../utils/shell.js';
 import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import type { Agent } from '../types/index.js';
@@ -34,13 +35,14 @@ export function createTmuxSession(
 ): void {
   const dir = opts.startDir || PROJECTS_DIR;
   execSync(
-    `tmux new-session -d -s "${tmuxSession}" -c "${dir}"`,
+    `tmux new-session -d -s ${shellEscape(tmuxSession)} -c ${shellEscape(dir)}`,
     EXEC_OPTS,
   );
   if (opts.echoName) {
     const suffix = opts.echoSuffix ? ` ${opts.echoSuffix}` : '';
+    const banner = `=== 🐕 ${opts.echoName} (${agentId}) ===${suffix}`;
     execSync(
-      `tmux send-keys -t "${tmuxSession}" "echo '=== 🐕 ${opts.echoName} (${agentId}) ===${suffix}'" Enter`,
+      `tmux send-keys -t ${shellEscape(tmuxSession)} ${shellEscape(`echo ${shellEscape(banner)}`)} Enter`,
       EXEC_OPTS,
     );
   }
@@ -50,7 +52,7 @@ export function createTmuxSession(
 /** Ensure a tmux session exists for the agent, recreating it if necessary. */
 export function ensureTmuxSession(agent: Agent): boolean {
   try {
-    execSync(`tmux has-session -t "${agent.tmuxSession}" 2>/dev/null`, EXEC_OPTS);
+    execSync(`tmux has-session -t ${shellEscape(agent.tmuxSession)} 2>/dev/null`, EXEC_OPTS);
     return true;
   } catch {
     try {

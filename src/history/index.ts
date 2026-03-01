@@ -54,7 +54,6 @@ export function addUserTurn(agentId: string, content: string, files: HistoryFile
   history.turns.push(turn);
   history.totalTurns++;
 
-  // Cap turns at MAX_TURNS
   if (history.turns.length > MAX_TURNS) {
     history.turns = history.turns.slice(-MAX_TURNS);
   }
@@ -82,26 +81,21 @@ export function addAssistantTurn(agentId: string, content: string, options: Assi
   history.turns.push(turn);
   history.totalTurns++;
 
-  // Update cwd if provided
   if (options.cwd) {
     history.cwd = options.cwd;
   }
 
-  // Cap turns at MAX_TURNS
   if (history.turns.length > MAX_TURNS) {
     history.turns = history.turns.slice(-MAX_TURNS);
   }
 
-  // Clear last error on success
   if (options.exitCode === 0) {
     history.lastError = null;
   }
 
   storage.save(agentId, history);
 
-  // Check if summary is needed
   const needsSummary = shouldGenerateSummary(history);
-
   return { history, needsSummary };
 }
 
@@ -198,17 +192,21 @@ function getUniqueFiles(turns: HistoryTurn[]): string[] {
   return Array.from(files);
 }
 
+// Pre-compiled regexes for tool extraction (avoids re-creating per call)
+const TOOL_PATTERNS = Object.entries(TOOL_ICONS).map(([name, icon]) => ({
+  name,
+  regex: new RegExp(icon + '\\s*' + name),
+}));
+
 /**
  * Extract tools used from output.
  * Detects tool names by matching their icons (from config/tools.js) in output text.
  */
 export function extractToolsFromOutput(output: string): string[] {
   const tools = new Set<string>();
-  for (const [toolName, icon] of Object.entries(TOOL_ICONS)) {
-    // Match icon followed by tool name (the format written by stream-display.js)
-    const pattern = new RegExp(icon + '\\s*' + toolName, 'g');
-    if (pattern.test(output)) {
-      tools.add(toolName);
+  for (const { name, regex } of TOOL_PATTERNS) {
+    if (regex.test(output)) {
+      tools.add(name);
     }
   }
   return Array.from(tools);

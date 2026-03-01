@@ -7,6 +7,7 @@ import { execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import type { Backend, BackendCapabilities, BuildCommandOpts, BuildCommandResult } from '../types/index.js';
 import { isCliInstalled, getCliVersion, BACKEND_EXEC_OPTS, BACKEND_METADATA } from './shared.js';
+import { sanitizePath } from './sanitize.js';
 
 const META = BACKEND_METADATA['cursor'];
 
@@ -70,11 +71,10 @@ export default function createCursorBackend(_config: Record<string, unknown> = {
       // For new sessions, we pre-create the chat ID with create-chat
       const resumeFlag = `--resume ${sessionId}`;
 
-      // Build the shell script
-      // Note: Cursor doesn't support --system-prompt, so we ignore systemPromptFile
-      // The server will prepend system instructions to the first prompt
+      const safeCwd = cwd ? sanitizePath(cwd) : null;
+
       let script = '#!/bin/bash\n';
-      if (cwd) script += `cd "${cwd}"\n`;
+      if (safeCwd) script += `cd "${safeCwd}"\n`;
       script += `cat "${promptFile}" | cursor-agent -p -f ${resumeFlag} ${modelFlag} ${mcpFlag} --output-format stream-json --stream-partial-output 2>/dev/null | node "${streamParserScript}" ${agentId} "${tmpDir}"\n`;
 
       return {
