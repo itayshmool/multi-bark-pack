@@ -73,5 +73,44 @@ export function buildMinimalContext(history: AgentHistory): string {
   return parts.join('\n\n');
 }
 
+/**
+ * Build a lightweight context reminder for stale resume sessions.
+ * Unlike buildContextPrompt (used in fallback), this is framed as a recap —
+ * the agent may still have its CLI session alive, so we don't say "session reset".
+ */
+export function buildContextReminder(
+  summary: string | null,
+  turns: Array<{ role: string; content: string }>,
+  cwd: string | null,
+): string {
+  const parts: string[] = [];
+
+  if (summary) {
+    parts.push(`[Conversation Recap]\n${summary}`);
+  }
+
+  const recentTurns = turns.slice(-3);
+  if (recentTurns.length > 0) {
+    parts.push('[Recent Messages]');
+    for (const turn of recentTurns) {
+      const prefix = turn.role === 'user' ? 'User' : 'Assistant';
+      const content = turn.content.length > 300
+        ? turn.content.substring(0, 300) + '...'
+        : turn.content;
+      parts.push(`${prefix}: ${content}`);
+    }
+  }
+
+  if (cwd) {
+    parts.push(`[Working Directory]\n${cwd}`);
+  }
+
+  if (parts.length === 0) return '';
+
+  parts.push('[This is a recap of your conversation so far. Continue naturally from where you left off.]');
+
+  return parts.join('\n\n');
+}
+
 // estimateTokens moved to utils/tokens.ts
 export { estimateTokens } from '../utils/tokens.js';

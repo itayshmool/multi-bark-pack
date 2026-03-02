@@ -29,11 +29,12 @@ let fullText = '';
 let progressText = '';
 const tools: string[] = [];
 let lastWrite = 0;
+let lastFilePath = '';
 const startTime = Date.now();
 const MAX_FULL_TEXT = 512 * 1024;   // 512KB — keep tail for final output
 const MAX_PROGRESS_TEXT = 8 * 1024; // 8KB — only used for thinking preview
 // Tunable via env (set in the tmux session by the backend's buildCommand)
-const THROTTLE_MS = parseInt(process.env.STREAM_THROTTLE_MS || '800', 10);
+const THROTTLE_MS = parseInt(process.env.STREAM_THROTTLE_MS || '500', 10);
 const THINKING_PREVIEW_LEN = parseInt(process.env.STREAM_THINKING_PREVIEW_LEN || '200', 10);
 // --- Structured events (JSONL) ---
 // Compact events emitted for the server to poll and broadcast via timeline/WebSocket
@@ -162,6 +163,9 @@ function checkAndRecordViolation(rawToolName: string, toolArgs: string): void {
 
 function flushCurrentTool(): void {
   if (currentToolName) {
+    // Extract file path from tool args (Read, Edit, Write, Glob)
+    const fileMatch = currentToolInput.match(/"(?:file_path|path|file)"\s*:\s*"([^"]+)"/);
+    if (fileMatch) lastFilePath = fileMatch[1];
     checkAndRecordViolation(currentToolName, currentToolInput);
     currentToolName = '';
     currentToolInput = '';
@@ -188,6 +192,13 @@ function buildStatus(): string {
     const recent = tools.slice(-5).map(t => `${getToolIcon(t)} ${t}`).join(' → ');
     const countTag = tools.length > 5 ? ` (+${tools.length - 5})` : '';
     lines.push(recent + countTag);
+  }
+
+  // Current file context
+  if (lastFilePath) {
+    const parts = lastFilePath.split('/');
+    const short = parts.length > 2 ? parts.slice(-2).join('/') : parts[parts.length - 1];
+    lines.push(`📄 ${short}`);
   }
 
   // Thinking preview — 💭 prefix instead of _italic_ (underscores in code break Markdown)

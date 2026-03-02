@@ -91,9 +91,9 @@ describe('claude-code backend', () => {
       expect(script).toContain('--resume test-session-id');
     });
 
-    it('excludes --system-prompt on resume', () => {
+    it('includes --system-prompt on resume to preserve identity on stale sessions', () => {
       const { script } = backend.buildCommand({ ...baseOpts, isResume: true });
-      expect(script).not.toContain('--system-prompt');
+      expect(script).toContain('--system-prompt');
     });
 
     it('includes --model flag', () => {

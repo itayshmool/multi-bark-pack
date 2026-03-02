@@ -251,7 +251,7 @@ export function buildNotification(agent: Agent, result: FallbackResult, failure:
 
   switch (result.strategy) {
     case 'retry':
-      return null;  // Silent
+      return `🔄 ${agent.name} · retrying (${agent.retryCount || 1}/${config.retry.maxAttempts})...`;
 
     case 'reset':
       return `${icon} ${agent.name} · context refreshed`;

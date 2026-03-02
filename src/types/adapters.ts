@@ -3,6 +3,8 @@ export type FinalMessageBehavior = 'edit' | 'send';
 export interface AdapterCapabilities {
   finalMessageBehavior: FinalMessageBehavior;
   maxMessageLength?: number;
+  /** Minimum ms between progress-edit API calls. Prevents rate-limiting. */
+  editIntervalMs?: number;
 }
 
 export interface NormalizedMessage {

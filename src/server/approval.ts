@@ -39,6 +39,7 @@ let _compiledIgnore: RegExp[] = [];
 let _approvalTimer: ReturnType<typeof setInterval> | null = null;
 let _getAgentsFn: (() => Map<string, Agent>) | null = null;
 let _getAdaptersFn: (() => Adapter[]) | null = null;
+const _lastCountdownEdit = new Map<string, number>();
 
 // ── Bootstrap ────────────────────────────────────────────────────
 
@@ -320,6 +321,39 @@ export function appendAuditLog(entry: {
 // ── Approval request ─────────────────────────────────────────────
 
 /**
+ * Build approval message text with dynamic time display.
+ */
+function buildApprovalText(
+  agentName: string,
+  tool: string,
+  args: string,
+  action: string,
+  backend: string,
+  cwd: string | null,
+  timeLabel: string,
+): string {
+  const cmdPreview = args.length > 120 ? args.substring(0, 117) + '...' : args;
+  const projectTag = cwd ? `📂 ${path.basename(cwd)} · ` : '';
+  const contextLine = `${projectTag}${backend || 'unknown'} · ⏱ ${timeLabel}`;
+
+  if (action === 'block') {
+    return (
+      `🚫 ${agentName} · BLOCKED operation\n\n` +
+      `🔧 ${tool}: \`${cmdPreview}\`\n` +
+      `${contextLine}\n\n` +
+      `Policy violation — review required.\n` +
+      `Reply *approve* or *deny*`
+    );
+  }
+  return (
+    `⏳ ${agentName} · approval needed\n\n` +
+    `🔧 ${tool}: \`${cmdPreview}\`\n` +
+    `${contextLine}\n\n` +
+    `Reply *approve* or *deny*`
+  );
+}
+
+/**
  * Called when a violation is detected after a turn completes.
  * Holds the output and sends an approval request to chat.
  */
@@ -331,29 +365,11 @@ export async function requestApproval(
   liveMsgId: string | null,
   replyToId: string | null,
 ): Promise<void> {
-  const cmdPreview = violation.args.length > 120
-    ? violation.args.substring(0, 117) + '...'
-    : violation.args;
-
   const timeoutMin = Math.round((_policy.approvalTimeout || 300_000) / 60_000);
-  const projectTag = agent.cwd ? `📂 ${path.basename(agent.cwd)} · ` : '';
-  const contextLine = `${projectTag}${agent.backend || 'unknown'} · ⏱ ${timeoutMin}m timeout`;
-
-  let text: string;
-  if (violation.action === 'block') {
-    text =
-      `🚫 ${agent.name} · BLOCKED operation\n\n` +
-      `🔧 ${violation.tool}: \`${cmdPreview}\`\n` +
-      `${contextLine}\n\n` +
-      `Policy violation — review required.\n` +
-      `Reply *approve* or *deny*`;
-  } else {
-    text =
-      `⏳ ${agent.name} · approval needed\n\n` +
-      `🔧 ${violation.tool}: \`${cmdPreview}\`\n` +
-      `${contextLine}\n\n` +
-      `Reply *approve* or *deny*`;
-  }
+  const text = buildApprovalText(
+    agent.name, violation.tool, violation.args, violation.action,
+    agent.backend, agent.cwd, `${timeoutMin}m timeout`,
+  );
 
   const approvalMsgId = await adapter.send(text, replyToId);
 
@@ -420,6 +436,7 @@ export async function resolveApproval(
   });
 
   agent.approvalPending = null;
+  _lastCountdownEdit.delete(agent.id);
   saveState();
   broadcastAgents();
   await updatePinnedStatus();
@@ -443,10 +460,29 @@ function startTimeoutChecker(): void {
     const now = Date.now();
     for (const [, agent] of _getAgentsFn()) {
       if (!agent.approvalPending) continue;
-      if (now - agent.approvalPending.requestedAt > _policy.approvalTimeout) {
+      const pending = agent.approvalPending;
+      const elapsed = now - pending.requestedAt;
+
+      if (elapsed > _policy.approvalTimeout) {
         console.log(`  ⏰ ${agent.name}: approval timed out — auto-denying`);
-        const adapter = findAdapterByName(agent.approvalPending.adapterName) ?? adapters[0];
+        const adapter = findAdapterByName(pending.adapterName) ?? adapters[0];
         await resolveApproval(agent, false, adapter, { auditDecision: 'timeout' });
+        continue;
+      }
+
+      // Countdown: edit approval message every ~60s with remaining time
+      if (pending.messageId) {
+        const lastEdit = _lastCountdownEdit.get(agent.id) || 0;
+        if (now - lastEdit > 60_000) {
+          const remainingMin = Math.ceil((_policy.approvalTimeout - elapsed) / 60_000);
+          const adp = findAdapterByName(pending.adapterName) ?? adapters[0];
+          const updated = buildApprovalText(
+            agent.name, pending.tool, pending.args, pending.action,
+            agent.backend, agent.cwd, `${remainingMin}m remaining`,
+          );
+          adp.edit(pending.messageId, updated).catch(() => {});
+          _lastCountdownEdit.set(agent.id, now);
+        }
       }
     }
   }, 15_000);

@@ -110,7 +110,7 @@ export async function runDaily(adapter: Adapter): Promise<void> {
       for (const f of [outFile, doneFile]) { try { unlinkSync(f); } catch { /* ignore */ } }
 
       const standupPrompt =
-        'Standup. Answer from memory only — no tool use, no research. Plain text, 3 lines max:\n1. Done: [what you completed]\n2. Next: [what\'s remaining]\n3. Blockers: [any blockers, or "none"]';
+        'Quick standup — answer from memory, no tool use. 2-3 lines max: what did you get done, what\'s left, any blockers?';
       writeFileSync(promptFile, standupPrompt);
 
       const backend =

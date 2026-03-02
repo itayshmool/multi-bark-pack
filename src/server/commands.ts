@@ -3,7 +3,7 @@
  */
 
 import type { Agent, Adapter, NormalizedMessage, BackendsProvider, SkillsManagerProvider, UsageTrackerProvider } from '../types/index.js';
-import { getAgents, getDeletedAgents, getMsgAgent, saveState } from './state.js';
+import { getAgents, getDeletedAgents, getMsgAgent, saveState, getLastAgentForSource } from './state.js';
 import { resolveApproval, loadPolicy, getPolicy } from './approval.js';
 import {
   findAgentByName,
@@ -21,6 +21,7 @@ import { updatePinnedStatus } from './status.js';
 import { parseMessageTags } from '../utils/tags.js';
 import { shellEscape } from '../utils/shell.js';
 import { runDaily } from './daily.js';
+import { buildFullHelp, buildQuickView } from './command-registry.js';
 import { exec } from 'node:child_process';
 
 // Lazily injected dependencies
@@ -58,40 +59,25 @@ export async function handleCommand(
   const command = body.split(/\s+/)[0].toLowerCase();
 
   if (command === '/help') {
-    await adapter.send(
-      '*Commands:*\n' +
-        '`/status` — show pack status\n' +
-        '`/backends` — show available LLM backends\n' +
-        '`/skills` — show available skills\n' +
-        '`/skill name @pup` — add skill to pup\n' +
-        '`/stop name` — stop a running pup\n' +
-        '`/clear name` — shelve pup (can /reborn)\n' +
-        '`/delete name` — permanently remove pup\n' +
-        '`/reset name` — wipe pup memory\n' +
-        '`/create` — reply to spawn pup with context\n' +
-        '`/losts` — show shelved pups\n' +
-        '`/reborn name` — resurrect shelved pup\n' +
-        '`/daily` — standup from all pups\n' +
-        '`/stats` — usage & cost summary\n' +
-        '`/approve name` — approve pending operation\n' +
-        '`/deny name` — deny pending operation\n' +
-        '`/reload-policy` — hot-reload bark-policy.json\n' +
-        '`/purge` — delete all shelved pups\n' +
-        '`/restart` `/shutdown` — server control\n' +
-        'Use `pack` instead of name for all pups\n\n' +
-        '*Multi-LLM:*\n' +
-        '`#claude-code` `#cursor` `#codex` `#gemini`\n' +
-        '`#haiku` `#sonnet` `#opus` (models)\n' +
-        'Example: `#cursor #opus fix this bug`\n\n' +
-        '*Routing:*\n' +
-        '`@name msg` — send to pup\n' +
-        'Reply — send to that pup\n' +
-        'New message — spawn new pup\n\n' +
-        '*Delegation:*\n' +
-        'Pups can spawn sub-agents via `bark delegate "task"`\n' +
-        'Add `--branch` for isolated branch + PR\n\n' +
-        '🖥 Dashboard: http://localhost:3333',
-    );
+    const arg = body.split(/\s+/)[1]?.toLowerCase();
+    if (arg === 'full') {
+      await adapter.send(
+        buildFullHelp() +
+          '\n\n*Routing:*\n' +
+          'Just send a message → goes to last active pup\n' +
+          '`@Name msg` → send to a specific pup\n' +
+          'Reply to a pup\'s message → continues that pup\n\n' +
+          '*Multi-LLM:*\n' +
+          '`#claude-code` `#cursor` `#codex` `#gemini`\n' +
+          '`#haiku` `#sonnet` `#opus` (models)\n' +
+          'Example: `#cursor #opus fix this bug`\n\n' +
+          'Use `pack` instead of Name for bulk ops\n\n' +
+          '🖥 Dashboard: http://localhost:3333',
+      );
+    } else {
+      const lastAgent = getLastAgentForSource(adapter.name);
+      await adapter.send(buildQuickView(lastAgent?.name ?? null));
+    }
     return true;
   }
 
@@ -122,7 +108,7 @@ export async function handleCommand(
         .map(s => `\`${s.id}\``)
         .join(', ');
       await adapter.send(
-        `Usage: \`/skill <name> [@pup]\`\n\nAvailable: ${available}`,
+        `Usage: \`/skill SkillName [@Name]\`\n\nAvailable: ${available}`,
       );
       return true;
     }
@@ -167,7 +153,7 @@ export async function handleCommand(
       `*${skill.name}*\n` +
         `${skill.description}\n\n` +
         `Tokens: ~${skill.tokens}\n\n` +
-        `Usage: \`/skill ${skillName} @pup\` to add to a pup`,
+        `Usage: \`/skill ${skillName} @Name\` to add to a pup`,
     );
     return true;
   }
@@ -190,7 +176,7 @@ export async function handleCommand(
         : 'unknown';
       lines.push(`💀 *${agent.name}* — born ${age}, shelved ${died}`);
     }
-    lines.push(`\nUse \`/reborn name\` to resurrect`);
+    lines.push(`\nUse \`/reborn @Name\` to resurrect`);
     const msgText = lines.join('\n');
     await adapter.send(
       msgText.length > 4000 ? msgText.substring(0, 3950) + '...' : msgText,
@@ -222,7 +208,7 @@ export async function handleCommand(
       .trim();
     if (!name) {
       await adapter.send(
-        'Usage: `/reborn name` — resurrect a deleted pup.\nUse `/losts` to see available pups.',
+        'Usage: `/reborn @Name` — resurrect a shelved pup.\nUse `/losts` to see available pups.',
       );
       return true;
     }
@@ -252,7 +238,7 @@ export async function handleCommand(
       extraText = parts.slice(1).join(' ').trim();
       if (!rawName) {
         await adapter.send(
-          'Usage: `/create @name` — name must be alphanumeric (a-z, 0-9, hyphens, underscores).',
+          'Usage: `/create @Name` — name must be alphanumeric (a-z, 0-9, hyphens, underscores).',
         );
         return true;
       }
@@ -279,7 +265,7 @@ export async function handleCommand(
 
     if (!msg.isQuotedReply && !extraText && !forceName) {
       await adapter.send(
-        'Usage: reply to a message with `/create` to spawn a new pup with that context.\nOptionally add instructions: `/create review this code`\nOptionally name the pup: `/create @name`',
+        'Usage: reply to a message with `/create` to spawn a new pup with that context.\nOptionally add instructions: `/create review this code`\nOptionally name the pup: `/create @Name`',
       );
       return true;
     }
@@ -290,7 +276,7 @@ export async function handleCommand(
       const quoted = await adapter.getQuotedMessage(msg.raw);
       const quotedBody = quoted ? quoted.body : '';
       if (extraText) {
-        prompt = `[context]:\n${quotedBody}\n\n[instructions]:\n${extraText}`;
+        prompt = `The user is referencing this message:\n\n${quotedBody}\n\nTheir request: ${extraText}`;
       } else {
         prompt = quotedBody;
       }
@@ -323,19 +309,29 @@ export async function handleCommand(
       const agent = await resolveAgentFromReply(msg, adapter);
       if (agent === null) return true;
       stopAgents([agent.name]);
-      await adapter.send(`🛑 *${agent.name}* stopped.`);
+      await adapter.send(`🛑 *${agent.name}* stopped.\n💡 Use \`/stats\` to see all agents`);
       return true;
     }
     if (names.length === 0) {
-      await adapter.send('Usage: `/stop name` or `/stop pack` or reply to a message with `/stop`');
+      await adapter.send('Usage: `/stop @Name` · `/stop pack` · or reply to a message with `/stop`\n💡 Use `/stats` to see all agent names');
       return true;
     }
     const { stopped, notFound } = stopAgents(names);
     let response = '';
     if (stopped.length) response += `🛑 Stopped: *${stopped.join('*, *')}*`;
     else if (names[0].toLowerCase() === 'pack') response = 'No pups are running.';
-    if (notFound.length) response += `${stopped.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
+    if (notFound.length) response += `${stopped.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}\n💡 \`/stats\` to see active agents`;
     await adapter.send(response);
+    return true;
+  }
+
+  if (command === '/stopall') {
+    const { stopped } = stopAgents(['pack']);
+    if (stopped.length === 0) {
+      await adapter.send('No pups are running.');
+    } else {
+      await adapter.send(`🛑 Stopped all: *${stopped.join('*, *')}*\n💡 Send any message to spawn a new pup`);
+    }
     return true;
   }
 
@@ -346,11 +342,11 @@ export async function handleCommand(
       if (agent === null) return true;
       const agentName = agent.name;
       clearAgents([agent.name]);
-      await adapter.send(`🧹 *${agentName}* shelved.\nUse \`/reborn ${agentName}\` to bring back.`);
+      await adapter.send(`🧹 *${agentName}* shelved.\nUse \`/reborn @${agentName}\` to bring back.`);
       return true;
     }
     if (names.length === 0) {
-      await adapter.send('Usage: /clear name1 name2 ... or /clear pack or reply to a message with /clear');
+      await adapter.send('Usage: `/clear @Name` · `/clear pack` · or reply to a message with `/clear`');
       return true;
     }
     const { cleared, notFound } = clearAgents(names);
@@ -358,7 +354,7 @@ export async function handleCommand(
     if (cleared.length) {
       const isPack = names.length === 1 && names[0].toLowerCase() === 'pack';
       response = isPack
-        ? `🧹 Entire pack shelved: *${cleared.join('*, *')}*\nUse \`/losts\` to see them, \`/reborn name\` to bring back.`
+        ? `🧹 Entire pack shelved: *${cleared.join('*, *')}*\nUse \`/losts\` to see them, \`/reborn @Name\` to bring back.`
         : `🧹 Shelved: *${cleared.join('*, *')}*`;
     }
     if (notFound.length) response += `${cleared.length ? '\n' : ''}❓ Not found: ${notFound.join(', ')}`;
@@ -443,82 +439,61 @@ export async function handleCommand(
     if (arg) {
       const agent = findAgentByName(arg);
       if (!agent) {
-        await adapter.send(`Pup *${arg}* not found.`);
+        await adapter.send(`Pup *${arg}* not found.\n💡 \`/stats\` (no args) for the full list`);
         return true;
       }
       const a = usageData.agents[agent.id];
-      if (!a) {
-        await adapter.send(`No usage data for *${agent.name}* yet.`);
-        return true;
-      }
-      const est = a.estimated ? ' ≈' : '';
-      const prefix = a.estimated ? '~' : '';
+      const runStatus = agent.status === 'active' ? (agent.hasRun ? '🟢 active' : '⚪ idle') : '🔴 stopped';
       const lines = [
-        `📊 *${agent.name}* Stats`,
-        `Cost: ${prefix}$${a.totalCostUsd.toFixed(4)}${est}`,
-        `Turns: ${a.turns}`,
-        `Tokens: ${a.totalInputTokens.toLocaleString()} in / ${a.totalOutputTokens.toLocaleString()} out`,
-        `Backend: ${a.backend}`,
-        `First seen: ${new Date(a.firstSeen).toLocaleDateString()}`,
+        `📊 *${agent.name}* · ${runStatus}`,
+        `Backend: ${agent.backend}${agent.model ? ` · ${agent.model}` : ''}`,
+        `CWD: ${agent.cwd ? agent.cwd.split('/').pop() : 'none'}`,
       ];
+      if (a) {
+        const est = a.estimated ? ' ≈' : '';
+        const prefix = a.estimated ? '~' : '';
+        lines.push(
+          '',
+          `Cost: ${prefix}$${a.totalCostUsd.toFixed(4)}${est}`,
+          `Turns: ${a.turns}`,
+          `Tokens: ${a.totalInputTokens.toLocaleString()} in / ${a.totalOutputTokens.toLocaleString()} out`,
+        );
+      }
+      lines.push('', `💡 Switch: \`@${agent.name} your message\``);
+      lines.push(`💡 Stop: \`/stop ${agent.name}\``);
       await adapter.send(lines.join('\n'));
       return true;
     }
 
-    // Global stats
+    // Agent list (primary view)
+    const activeAgents = [...getAgents().values()].filter(a => !a.parentId);
+    const lines: string[] = ['*Pack Status*\n'];
+
+    if (activeAgents.length === 0) {
+      lines.push('No active pups.');
+      lines.push('\n💡 Send any message to spawn one');
+    } else {
+      for (const agent of activeAgents) {
+        const a = usageData.agents[agent.id];
+        const runStatus = agent.status === 'active' ? (agent.hasRun ? '🟢' : '⚪') : '🔴';
+        const costStr = a && a.totalCostUsd > 0 ? ` · $${a.totalCostUsd.toFixed(3)}` : '';
+        const turnsStr = a && a.turns > 0 ? ` · ${a.turns} turns` : '';
+        lines.push(`${runStatus} *${agent.name}* · ${agent.backend}${costStr}${turnsStr}`);
+      }
+
+      lines.push('');
+      lines.push('*How to route:*');
+      lines.push('Just send a message → goes to last active pup');
+      lines.push('`@Name message` → send to a specific pup');
+      lines.push('`/stop Name` · `/stopall` → stop pup(s)');
+            lines.push('`/stats @Name` → detailed stats for one pup');
+    }
+
+    // Global cost summary (if any)
     const t = usageData.totals;
-    if (t.turns === 0) {
-      await adapter.send('📊 No usage data yet.');
-      return true;
-    }
-
-    const lines = [
-      `📊 *Pack Stats*`,
-      `Total: $${t.costUsd.toFixed(4)} (${t.turns} turns)`,
-      `Tokens: ${t.inputTokens.toLocaleString()} in / ${t.outputTokens.toLocaleString()} out`,
-    ];
-
-    // By backend
-    const byBackend: Record<
-      string,
-      { cost: number; turns: number; estimated: boolean }
-    > = {};
-    for (const [, a] of Object.entries(usageData.agents)) {
-      const b = a.backend || 'unknown';
-      if (!byBackend[b])
-        byBackend[b] = { cost: 0, turns: 0, estimated: false };
-      byBackend[b].cost += a.totalCostUsd;
-      byBackend[b].turns += a.turns;
-      if (a.estimated) byBackend[b].estimated = true;
-    }
-
-    if (Object.keys(byBackend).length > 0) {
-      lines.push('', '*By backend:*');
-      for (const [name, b] of Object.entries(byBackend).sort(
-        (a, b) => b[1].cost - a[1].cost,
-      )) {
-        const est = b.estimated ? ' ≈' : '';
-        const prefix = b.estimated ? '~' : '';
-        lines.push(
-          `  ${name}: ${prefix}$${b.cost.toFixed(4)} (${b.turns} turns)${est}`,
-        );
-      }
-    }
-
-    // Top pups (sorted by cost, max 10)
-    const sortedAgents = Object.entries(usageData.agents)
-      .sort((a, b) => b[1].totalCostUsd - a[1].totalCostUsd)
-      .slice(0, 10);
-
-    if (sortedAgents.length > 0) {
-      lines.push('', '*Top pups:*');
-      for (const [, a] of sortedAgents) {
-        const est = a.estimated ? ' ≈' : '';
-        const prefix = a.estimated ? '~' : '';
-        lines.push(
-          `  ${a.name}: ${prefix}$${a.totalCostUsd.toFixed(4)} (${a.turns} turns)${est}`,
-        );
-      }
+    if (t.turns > 0) {
+      lines.push('');
+      lines.push(`*Total:* $${t.costUsd.toFixed(4)} · ${t.turns} turns`);
     }
 
     await adapter.send(lines.join('\n'));
@@ -542,7 +517,7 @@ export async function handleCommand(
     }
 
     if (names.length === 0) {
-      await adapter.send(`Usage: \`${command} name\` or \`${command} pack\``);
+      await adapter.send(`Usage: \`${command} @Name\` or \`${command} pack\``);
       return true;
     }
 

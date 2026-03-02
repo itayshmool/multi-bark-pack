@@ -4,7 +4,7 @@ import type { NormalizedMessage, Adapter } from '../types/index.js';
 // --- Use vi.hoisted for values referenced inside vi.mock factories ---
 const { mockOwnerIds, mockHandleCommand, mockFindAgentByName, mockSpawnAgent,
   mockSendToAgent, mockGetAgents, mockGetDeletedAgents, mockGetMsgAgent,
-  mockSetMsgAgent, mockHasAgent, mockHasDeletedAgent } = vi.hoisted(() => ({
+  mockSetMsgAgent, mockHasAgent, mockHasDeletedAgent, mockGetLastAgentForSource } = vi.hoisted(() => ({
   mockOwnerIds: { whatsapp: new Set(['owner-1']), telegram: null as any, slack: null as any } as Record<string, any>,
   mockHandleCommand: vi.fn(async () => false),
   mockFindAgentByName: vi.fn((): any => null),
@@ -16,6 +16,7 @@ const { mockOwnerIds, mockHandleCommand, mockFindAgentByName, mockSpawnAgent,
   mockSetMsgAgent: vi.fn(),
   mockHasAgent: vi.fn(() => false),
   mockHasDeletedAgent: vi.fn(() => false),
+  mockGetLastAgentForSource: vi.fn((): any => undefined),
 }));
 
 vi.mock('./config.js', () => ({
@@ -58,6 +59,7 @@ vi.mock('./state.js', () => ({
   setMsgAgent: mockSetMsgAgent,
   hasAgent: mockHasAgent,
   hasDeletedAgent: mockHasDeletedAgent,
+  getLastAgentForSource: mockGetLastAgentForSource,
 }));
 
 vi.mock('./voice.js', () => ({
@@ -300,6 +302,70 @@ describe('routing - onMessage', () => {
     });
   });
 
+  describe('last-active agent routing (Route 3)', () => {
+    it('routes plain message to last active agent — no spawn', async () => {
+      const mockAgent = { id: 'a1', name: 'Chase', status: 'active', parentId: null };
+      mockGetLastAgentForSource.mockReturnValueOnce(mockAgent);
+
+      const msg = createMockMessage({ text: 'continue the work' });
+      await onMessage(msg);
+
+      expect(mockSendToAgent).toHaveBeenCalledWith(
+        mockAgent,
+        expect.stringContaining('continue the work'),
+        expect.any(Object),
+        null,
+        'msg-1',
+        null,
+      );
+      expect(mockSpawnAgent).not.toHaveBeenCalled();
+    });
+
+    it('spawns new agent when last active is a sub-agent (parentId set)', async () => {
+      const subAgent = { id: 'a2', name: 'Rocky', status: 'active', parentId: 'a1' };
+      mockGetLastAgentForSource.mockReturnValueOnce(subAgent);
+
+      const msg = createMockMessage({ text: 'new task' });
+      await onMessage(msg);
+
+      expect(mockSpawnAgent).toHaveBeenCalled();
+      expect(mockSendToAgent).not.toHaveBeenCalled();
+    });
+
+    it('spawns new agent when last active is stopped', async () => {
+      const stoppedAgent = { id: 'a1', name: 'Chase', status: 'stopped', parentId: null };
+      mockGetLastAgentForSource.mockReturnValueOnce(stoppedAgent);
+
+      const msg = createMockMessage({ text: 'new task' });
+      await onMessage(msg);
+
+      expect(mockSpawnAgent).toHaveBeenCalled();
+    });
+
+    it('spawns new agent when no last-active exists', async () => {
+      // default mock returns undefined — no explicit setup needed
+      const msg = createMockMessage({ text: 'fresh start' });
+      await onMessage(msg);
+
+      expect(mockSpawnAgent).toHaveBeenCalled();
+      expect(mockSendToAgent).not.toHaveBeenCalled();
+    });
+
+    it('@mention takes priority over last-active', async () => {
+      // Even with a last-active agent, @mention routes to the mentioned agent
+      const mentionedAgent = { id: 'a2', name: 'Marshall', status: 'active' };
+      mockFindAgentByName.mockReturnValueOnce(mentionedAgent);
+
+      const msg = createMockMessage({ text: '@Marshall do this' });
+      await onMessage(msg);
+
+      expect(mockSendToAgent).toHaveBeenCalledWith(
+        mentionedAgent, expect.any(String), expect.any(Object), null, 'msg-1', null,
+      );
+      expect(mockSpawnAgent).not.toHaveBeenCalled();
+    });
+  });
+
   describe('new agent spawn', () => {
     it('spawns new agent for fresh message', async () => {
       const msg = createMockMessage({ text: 'fix the login page' });
@@ -368,7 +434,9 @@ describe('routing - onMessage', () => {
 
       await onMessage(msg);
 
-      expect(adapter.send).toHaveBeenCalledWith(expect.stringContaining('blocked'));
+      // First sends "screening..." placeholder, then edits it to the block message
+      expect(adapter.send).toHaveBeenCalledWith('🛡️ screening...', 'msg-1');
+      expect(adapter.edit).toHaveBeenCalledWith('msg-id', expect.stringContaining('blocked'));
       expect(mockSpawnAgent).not.toHaveBeenCalled();
     });
 

@@ -62,7 +62,7 @@ export function createSlackAdapter({
 
   const adapter: Adapter = {
     name: 'slack',
-    capabilities: { finalMessageBehavior: 'edit', maxMessageLength: SLACK_MAX_MSG_LEN },
+    capabilities: { finalMessageBehavior: 'edit', maxMessageLength: SLACK_MAX_MSG_LEN, editIntervalMs: 1500 },
 
     async initialize(onMessage: (msg: NormalizedMessage) => void) {
       web = new WebClient(botToken);

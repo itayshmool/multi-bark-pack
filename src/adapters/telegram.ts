@@ -1,5 +1,6 @@
 import { errorMessage } from '../utils/error.js';
 import { truncateMessage } from '../utils/text.js';
+import { getTelegramCommands } from '../server/command-registry.js';
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -204,7 +205,7 @@ export function createTelegramAdapter({
   const adapter: TelegramAdapter = {
     name: 'telegram',
     _botInfo: null,
-    capabilities: { finalMessageBehavior: 'send', maxMessageLength: TG_MAX_MSG_LEN },
+    capabilities: { finalMessageBehavior: 'send', maxMessageLength: TG_MAX_MSG_LEN, editIntervalMs: 3000 },
 
     async initialize(onMessage: (msg: NormalizedMessage) => void) {
       // Validate token
@@ -213,6 +214,14 @@ export function createTelegramAdapter({
       console.log(
         `Telegram bot: @${me.username} (${me.first_name})`,
       );
+
+      // Register bot commands from central registry (shows in Telegram's / autocomplete menu)
+      try {
+        await api('setMyCommands', { commands: getTelegramCommands() });
+        console.log('  ✅ Telegram bot commands registered');
+      } catch (e: unknown) {
+        console.log(`  ⚠️ Could not register Telegram commands: ${errorMessage(e)}`);
+      }
 
       if (defaultChatId) {
         console.log(

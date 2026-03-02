@@ -22,6 +22,7 @@ const agents = new Map<string, Agent>();
 const deletedAgents = new Map<string, Agent>();
 const msgToAgent = new Map<string, string>(); // prefixed msg id -> agent id
 const agentsByName = new Map<string, Agent>(); // lowercase name -> agent (active only)
+const lastAgentBySource = new Map<string, string>(); // adapterName -> agentId
 
 // --- Adapter State ---
 const adapters: Adapter[] = [];
@@ -63,6 +64,17 @@ export function getAgentByName(name: string): Agent | undefined {
 
 export function hasAgent(id: string): boolean {
   return agents.has(id);
+}
+
+// --- Last Active Agent Per Adapter ---
+export function getLastAgentForSource(source: string): Agent | undefined {
+  const id = lastAgentBySource.get(source);
+  if (!id) return undefined;
+  return agents.get(id);
+}
+
+export function setLastAgentForSource(source: string, agentId: string): void {
+  lastAgentBySource.set(source, agentId);
 }
 
 // --- Deleted Agents ---

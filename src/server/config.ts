@@ -68,7 +68,8 @@ delete cleanEnv.CLAUDECODE;
 export const EXEC_OPTS: ExecOpts = { env: cleanEnv, maxBuffer: 50 * 1024 * 1024 };
 
 // --- Timeouts ---
-export const AGENT_TIMEOUT: number = parseInt(process.env.AGENT_TIMEOUT || '600000', 10);
+// 0 = no timeout (default). Set AGENT_TIMEOUT in .env to enforce a limit (ms).
+export const AGENT_TIMEOUT: number = parseInt(process.env.AGENT_TIMEOUT || '0', 10);
 
 // --- Delegation limits ---
 export const MAX_DELEGATION_DEPTH: number = parseInt(process.env.MAX_DELEGATION_DEPTH || '1', 10);

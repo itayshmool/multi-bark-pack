@@ -32,6 +32,7 @@ import {
   deleteMsgAgent,
   genId,
   saveState,
+  setLastAgentForSource,
 } from './state.js';
 import { nextPupName, sanitizeName, getAgentIcon, getActivePackId } from './naming.js';
 import { createTmuxSession } from './tmux.js';
@@ -121,6 +122,7 @@ export async function spawnAgent(
     retryCount: 0,
   };
   setAgent(id, agent);
+  if (!parentId) setLastAgentForSource(adapter.name, id);
   saveState();
 
   console.log(`  🐕 Spawned ${name} (tmux: ${tmuxSession})`);
@@ -134,7 +136,11 @@ export async function spawnAgent(
 
   let liveMsgId: string | null;
   const icon = getAgentIcon(agent);
-  const thinkingMsg = `${icon} ${name} · ${backend.name}\n💭 thinking...`;
+  const hint = parentId ? '' : (
+    `\n💡 Reply or \`@${name} msg\` to continue` +
+    `\n📋 \`/stats\` agents · \`/stop ${name}\` · \`/clear\` · \`/reset\` · \`/help\` commands`
+  );
+  const thinkingMsg = `${icon} ${name} · ${backend.name}\n💭 thinking...${hint}`;
   if (reuseMsgId) {
     liveMsgId = reuseMsgId;
     await adapter.edit(reuseMsgId, thinkingMsg);
@@ -165,6 +171,8 @@ export async function sendToAgent(
   replyToId: string | null = null,
   model: string | null = null,
 ): Promise<void> {
+  if (!agent.parentId) setLastAgentForSource(adapter.name, agent.id);
+
   if (model && model !== agent.model) {
     agent.model = model;
     saveState();
@@ -210,15 +218,50 @@ export function runAgentCommand(
   liveMsgId: string | null = null,
   replyToId: string | null = null,
 ): void {
+  // Adapter-aware edit throttle: respects rate limits (Telegram ~3s, WhatsApp/Slack ~1.5s).
+  // Only one edit in-flight at a time, always sends the latest content, drops stale updates.
+  const editIntervalMs = adapter.capabilities?.editIntervalMs || 1500;
+  let editInFlight = false;
+  let pendingEditText: string | null = null;
+  let lastEditTime = 0;
+  let editTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function scheduleEdit(): void {
+    if (!pendingEditText || !liveMsgId || editInFlight || editTimer) return;
+    const elapsed = Date.now() - lastEditTime;
+    if (elapsed >= editIntervalMs) {
+      doEdit();
+    } else {
+      editTimer = setTimeout(() => { editTimer = null; doEdit(); }, editIntervalMs - elapsed);
+    }
+  }
+
+  function doEdit(): void {
+    if (!pendingEditText || !liveMsgId) return;
+    const text = pendingEditText;
+    pendingEditText = null;
+    editInFlight = true;
+    lastEditTime = Date.now();
+    adapter.edit(liveMsgId, text).catch(() => {}).finally(() => {
+      editInFlight = false;
+      if (pendingEditText !== null) scheduleEdit();
+    });
+  }
+
+  function flushEdit(text: string): void {
+    if (!liveMsgId) return;
+    pendingEditText = text;
+    scheduleEdit();
+  }
+
   executeAgentCommand(agent, prompt, {
     source: 'adapter',
-    pollInterval: 2000,
+    pollInterval: parseInt(process.env.POLL_INTERVAL_MS || '1200', 10),
     timeout: _fallbackManager!.config.timeout.commandMs,
 
-    async onProgress(agent: Agent, progress: string) {
+    onProgress(agent: Agent, progress: string) {
       if (liveMsgId) {
-        const msg = formatAgentMessage(agent, progress, { isProgress: true });
-        await adapter.edit(liveMsgId, msg);
+        flushEdit(formatAgentMessage(agent, progress, { isProgress: true }));
       }
     },
 
@@ -248,15 +291,19 @@ export function runAgentCommand(
           _backends,
           null,
         );
+        const notification = _fallbackManager!.buildNotification(
+          agent,
+          fallbackResult,
+          failure,
+        );
+        if (notification && liveMsgId) {
+          await adapter.edit(liveMsgId, notification);
+        }
         if (fallbackResult.success && fallbackResult.action !== 'retry_same_session') {
-          const notification = _fallbackManager!.buildNotification(
-            agent,
-            fallbackResult,
-            failure,
-          );
-          if (notification && liveMsgId) {
-            await adapter.edit(liveMsgId, notification);
-          }
+          return;
+        }
+        // Fallback failed entirely — show friendly error instead of raw output
+        if (!fallbackResult.success && notification && liveMsgId) {
           return;
         }
       }
@@ -322,9 +369,12 @@ export function runAgentCommand(
 
     async onTmuxError(agent: Agent, error: string) {
       const icon = getAgentIcon(agent);
-      adapter
-        .send(`${icon} ${agent.name} ❌ tmux error: ${error.substring(0, 200)}`)
-        .catch(() => {});
+      const friendly = `${icon} ${agent.name} lost connection.\n💬 Reply to reconnect.`;
+      if (liveMsgId) {
+        await adapter.edit(liveMsgId, friendly).catch(() => {});
+      } else {
+        adapter.send(friendly).catch(() => {});
+      }
     },
   });
 }

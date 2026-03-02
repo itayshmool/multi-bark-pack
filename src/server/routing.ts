@@ -6,7 +6,7 @@
 
 import type { NormalizedMessage, Adapter, SecurityGuardProvider, TimelineProvider } from '../types/index.js';
 import { OWNER_IDS } from './config.js';
-import { getAgents, getDeletedAgents, getMsgAgent, setMsgAgent, hasAgent, hasDeletedAgent } from './state.js';
+import { getAgents, getDeletedAgents, getMsgAgent, setMsgAgent, hasAgent, hasDeletedAgent, getLastAgentForSource } from './state.js';
 import { transcribeAudio } from './voice.js';
 import { handleCommand } from './commands.js';
 import { findAgentByName, spawnAgent, sendToAgent } from './agents.js';
@@ -148,6 +148,10 @@ export async function onMessage(msg: NormalizedMessage): Promise<void> {
 
   // --- Security Guard: screen full message including media context ---
   if (_securityGuard?.isEnabled()) {
+    // Send immediate feedback before screening (reuse voice listening msg if present)
+    if (!listeningMsgId) {
+      listeningMsgId = await adapter.send('🛡️ screening...', msg.id);
+    }
     const verdict = await _securityGuard.screen(fullBody);
     if (!verdict.allowed) {
       console.log(
@@ -156,7 +160,11 @@ export async function onMessage(msg: NormalizedMessage): Promise<void> {
       _timeline?.emit('security_block', {
         meta: { category: verdict.category, reason: verdict.reason },
       });
-      await adapter.send(`🛡️ Message blocked: ${verdict.reason}`);
+      if (listeningMsgId) {
+        await adapter.edit(listeningMsgId, `🛡️ Message blocked: ${verdict.reason}`);
+      } else {
+        await adapter.send(`🛡️ Message blocked: ${verdict.reason}`);
+      }
       return;
     }
     if (verdict.latencyMs > 0) {
@@ -236,7 +244,14 @@ export async function onMessage(msg: NormalizedMessage): Promise<void> {
     console.log(`  ↳ Reply to unknown agent, spawning new`);
   }
 
-  // --- Route 3: New message -> spawn new agent ---
+  // --- Route 3: Re-use last active agent, or spawn new ---
+  const lastAgent = getLastAgentForSource(adapter.name);
+  if (lastAgent && lastAgent.status === 'active' && !lastAgent.parentId) {
+    console.log(`  ↳ Routed to ${lastAgent.name} (via last-active)`);
+    sendToAgent(lastAgent, fullBody, adapter, listeningMsgId, msg.id, requestedModel);
+    return;
+  }
+
   spawnAgent(
     fullBody,
     adapter,

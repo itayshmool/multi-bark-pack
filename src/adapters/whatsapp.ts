@@ -46,7 +46,7 @@ export function createWhatsAppAdapter({
 
   const adapter: Adapter = {
     name: 'whatsapp',
-    capabilities: { finalMessageBehavior: 'edit', maxMessageLength: 4096 },
+    capabilities: { finalMessageBehavior: 'edit', maxMessageLength: 4096, editIntervalMs: 1500 },
 
     async initialize(onMessage: (msg: NormalizedMessage) => void) {
       client = new Client({

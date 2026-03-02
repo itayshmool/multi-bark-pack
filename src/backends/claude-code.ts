@@ -64,7 +64,7 @@ export default function createClaudeCodeBackend(_config: Record<string, unknown>
         ? ` --system-prompt "$(cat '${systemPromptFile}')"`
         : '';
       const claudeArgs = isResume
-        ? `--resume ${sessionId} ${modelFlag}`
+        ? `--resume ${sessionId} ${modelFlag}${systemPromptArg}`
         : `--session-id ${sessionId} ${modelFlag}${systemPromptArg}`;
 
       const safeCwd = cwd ? sanitizePath(cwd) : null;

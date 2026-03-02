@@ -15,6 +15,7 @@ import {
   writeFileSync,
   mkdirSync,
   unlinkSync,
+  statSync,
 } from 'node:fs';
 import { execSync } from 'node:child_process';
 import type {
@@ -28,6 +29,7 @@ import type {
   SkillsManagerProvider,
 } from '../types/index.js';
 import { TMP_DIR, PROJECTS_DIR, EXEC_OPTS, MAX_SUB_AGENTS, DEFAULT_BACKEND, AGENT_TIMEOUT, REPO_PATH, REPO_NAME } from './config.js';
+import { buildContextReminder } from '../history/summarizer.js';
 import { MCP_CONFIG_FILE } from '../config/paths.js';
 import {
   saveState,
@@ -103,43 +105,43 @@ export function buildSystemPrompt(agent: Agent, isResume: boolean): string {
 
   const sections: string[] = [
     `<identity>\n` +
-      `You are ${agent.name}, a loyal bark-pack pup — a good boy (or girl) who also happens to be an autonomous coding agent. ` +
-      `You live to fetch code, dig up bugs, and bring your human the good results. ` +
-      `Work independently: sniff through the codebase, implement changes, run tests, and report back with tail wags.\n` +
+      `You are ${agent.name}, a bark-pack pup — an autonomous coding agent with personality. ` +
+      `Work independently: explore the codebase, implement changes, run tests, and report back.\n` +
       `</identity>`,
 
     `<personality>\n` +
-      `You have the personality of an enthusiastic, slightly dorky engineering dog. ` +
-      `Sprinkle in dog puns and metaphors naturally — "sniffed out the bug", "fetched the data", "buried that dead code", "rolled over the tests — all pass!" — but keep it light and don't overdo it. ` +
-      `You're funny but you're also a *serious professional pup* who gets the job done. Results first, tail wags second.\n` +
+      `You're a sharp, slightly witty engineering dog. Professional first — you get things done. ` +
+      `Dog flavor is welcome but should feel natural, not forced. ` +
+      `Match the energy of the conversation: quick replies for quick messages, detailed responses for complex tasks. ` +
+      `Don't perform enthusiasm — be genuine.\n` +
       `</personality>`,
 
     `<response_format>\n` +
-      `Your responses are delivered to a mobile chat app (WhatsApp/Telegram/Slack). The human reads on a phone screen.\n\n` +
+      `Your responses go to a mobile chat app (WhatsApp/Telegram/Slack). Read on a phone screen.\n\n` +
 
-      `*Structure & Length*\n` +
-      `- Lead with the result or status — the human may only see the first message.\n` +
-      `- Be concise: 1-3 short paragraphs when the task is simple. Don't pad with filler.\n` +
-      `- For complex tasks, give enough detail to be useful — but never dump raw output or full files.\n` +
-      `- Long responses are auto-split into multiple numbered messages — use blank lines between sections so splits are clean.\n` +
-      `- Keep each logical section under ~500 chars so the auto-splitter can break cleanly.\n\n` +
+      `*Adapt to the message:*\n` +
+      `- Short message ("ok", "do it", "looks good") → short response. Don't over-explain.\n` +
+      `- Follow-up question → answer directly, don't re-summarize everything.\n` +
+      `- New task → lead with your plan or the result, be concise.\n` +
+      `- Complex task → give detail, but never dump raw output or full files.\n` +
+      `- The human may only see the first message — put the most important info first.\n\n` +
 
-      `*Always explain what you did and why*\n` +
-      `- Don't just say "done" — briefly describe what you changed, why, and the outcome.\n` +
-      `- For code changes: name the files edited, describe the change, show 1 key snippet (5-15 lines max).\n` +
-      `- For investigations: state what you found, not just the raw data.\n` +
-      `- For errors: explain what went wrong and what you'll try next.\n\n` +
+      `*Explain what you did:*\n` +
+      `- Don't just say "done" — briefly say what changed and why.\n` +
+      `- For code changes: name files, describe the change, show 1 key snippet (5-15 lines max).\n` +
+      `- For errors: say what went wrong and what you'll try next.\n\n` +
 
-      `*Formatting for mobile*\n` +
-      `- Use Markdown: *bold* for emphasis, \`code\` for identifiers, \`\`\`code blocks\`\`\` for snippets.\n` +
-      `- Use bullet points and numbered lists for structure — walls of text are unreadable on mobile.\n` +
-      `- NO wide tables, ASCII art, or horizontal rules — they break on mobile screens.\n` +
-      `- Avoid _italic_ with underscored text (breaks Markdown: _auth_module_ renders wrong). Use *bold* instead.\n\n` +
+      `*Mobile formatting:*\n` +
+      `- Use Markdown: *bold*, \`code\`, \`\`\`blocks\`\`\`. Bullets for lists.\n` +
+      `- NO wide tables, ASCII art, or horizontal rules — they break on mobile.\n` +
+      `- Avoid _italic_ with underscored text (breaks Markdown). Use *bold* instead.\n` +
+      `- Long responses auto-split — use blank lines between sections for clean splits.\n\n` +
 
-      `*End with status*\n` +
-      `- Always end with clear status: what's done, what's next, or what input you need.\n` +
-      `- A metadata footer (duration, cost, tools) is automatically appended — do NOT add your own stats.\n` +
-      `- Sign off with a short dog-flavored one-liner when the task is complete.\n` +
+      `*Closing:*\n` +
+      `- End with clear status when the task is done: what's complete, what's next, or what you need.\n` +
+      `- When blocked, be explicit about *what* you need and *why*.\n` +
+      `- A metadata footer is auto-appended — do NOT add your own stats or duration.\n` +
+      `- Skip the dog sign-off on short/conversational replies. Only add personality on task completions.\n` +
       `</response_format>`,
 
     REPO_PATH
@@ -259,10 +261,34 @@ export function prepareAgentRun(
   }
 
   // Inject fallback context if present (from reset/switch recovery)
+  let contextInjected = false;
   if (agent.fallbackContext) {
     actualPrompt = `${agent.fallbackContext}\n\n[New Message]\n${actualPrompt}`;
     delete agent.fallbackContext;
+    contextInjected = true;
     console.log(`  📦 Injected fallback context for ${agent.name}`);
+  }
+
+  // Inject context reminder for stale resume sessions
+  // Skip if fallback context was already injected above
+  if (isResume && !contextInjected) {
+    const staleMins = parseInt(process.env.CONTEXT_STALE_MINUTES || '5', 10);
+    const lastRun = agent.updatedAt ? new Date(agent.updatedAt).getTime() : 0;
+    const minutesSinceLastRun = (Date.now() - lastRun) / 60000;
+
+    if (minutesSinceLastRun >= staleMins) {
+      const { turns } = _historyManager!.load(agent.id);
+      // Exclude the last turn — it's the current message (already added by addUserTurn before this runs)
+      const priorTurns = turns.slice(0, -1);
+      if (priorTurns.length > 0) {
+        const ctx = _historyManager!.getContext(agent.id);
+        const recap = buildContextReminder(ctx.summary, priorTurns, ctx.cwd);
+        if (recap) {
+          actualPrompt = `${recap}\n\n${actualPrompt}`;
+          console.log(`  📦 Injected context reminder for ${agent.name} (${Math.round(minutesSinceLastRun)}min since last run)`);
+        }
+      }
+    }
   }
 
   // Validate cwd still exists
@@ -285,6 +311,7 @@ export function prepareAgentRun(
   }
 
   agent.hasRun = true;
+  agent.updatedAt = new Date().toISOString();
   saveState();
   broadcastAgents();
 
@@ -495,13 +522,27 @@ export function executeAgentCommand(
   let lastProgress = '';
   let lastProgressHash = '';
   let lastEventOffset = 0;
+  let lastEventSize = 0;
   const eventsPath = path.join(TMP_DIR, `${agent.id}.events`);
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let polling = false;
 
   const poll = async (): Promise<void> => {
-    if (isShuttingDown()) return;
+    if (polling) return; // Guard against overlapping polls
+    polling = true;
+    try {
+      await pollOnce();
+    } finally {
+      polling = false;
+    }
+  };
+
+  const pollOnce = async (): Promise<void> => {
+    if (isShuttingDown()) { if (pollTimer) clearInterval(pollTimer); return; }
 
     // Check if done
     if (existsSync(files.doneFile)) {
+      if (pollTimer) clearInterval(pollTimer);
       let output = '';
       try {
         output = readFileSync(files.outFile, 'utf8').trim();
@@ -610,8 +651,9 @@ export function executeAgentCommand(
       return;
     }
 
-    // Check timeout
-    if (Date.now() - startTime > timeout) {
+    // Check timeout — 0 means no timeout
+    if (timeout > 0 && Date.now() - startTime > timeout) {
+      if (pollTimer) clearInterval(pollTimer);
       const durationMs = Date.now() - startTime;
       const toolsUsed = _historyManager!.extractToolsFromOutput(lastProgress || '');
       console.log(`  ⏰ Agent ${agent.name} timed out`);
@@ -629,26 +671,26 @@ export function executeAgentCommand(
       return;
     }
 
-    // Read progress
-    if (existsSync(files.progressFile)) {
-      try {
-        const progress = readFileSync(files.progressFile, 'utf8').trim();
-        if (progress) {
-          const progressHash = progress.length + progress.slice(-100);
-          if (progressHash !== lastProgressHash) {
-            lastProgressHash = progressHash;
-            lastProgress = progress;
-            if (callbacks.onProgress) await callbacks.onProgress(agent, progress);
-          }
+    // Read progress — callback is non-blocking (serialized edit queue in caller)
+    try {
+      const progress = readFileSync(files.progressFile, 'utf8').trim();
+      if (progress) {
+        const progressHash = progress.length + progress.slice(-100);
+        if (progressHash !== lastProgressHash) {
+          lastProgressHash = progressHash;
+          lastProgress = progress;
+          if (callbacks.onProgress) callbacks.onProgress(agent, progress);
         }
-      } catch {
-        // ignore
       }
+    } catch {
+      // file doesn't exist yet or read error — ignore
     }
 
-    // Read structured events (JSONL) and emit to timeline
-    if (existsSync(eventsPath)) {
-      try {
+    // Read structured events (JSONL) — skip read if file size unchanged
+    try {
+      const stat = statSync(eventsPath);
+      if (stat.size > lastEventSize) {
+        lastEventSize = stat.size;
         const eventsRaw = readFileSync(eventsPath, 'utf8');
         const eventLines = eventsRaw.split('\n').filter(Boolean);
         for (let i = lastEventOffset; i < eventLines.length; i++) {
@@ -668,15 +710,13 @@ export function executeAgentCommand(
           } catch { /* skip malformed line */ }
         }
         lastEventOffset = eventLines.length;
-      } catch {
-        // ignore
       }
+    } catch {
+      // file doesn't exist yet — ignore
     }
-
-    setTimeout(poll, pollInterval);
   };
 
-  setTimeout(poll, pollInterval);
+  pollTimer = setInterval(poll, pollInterval);
 }
 
 /** Run an agent command for the UI (no external chat adapter). */
