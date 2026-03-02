@@ -225,7 +225,7 @@ export async function handleCommand(
     return true;
   }
 
-  if (command === '/create') {
+  if (command === '/spawn' || command === '/create') {
     const parts = body.split(/\s+/).slice(1);
     const firstWord = parts[0] || '';
     const isNameArg = firstWord.startsWith('@');

@@ -185,13 +185,16 @@ describe('routing - onMessage', () => {
       expect(mockSpawnAgent).not.toHaveBeenCalled();
     });
 
-    it('continues routing when handleCommand returns false', async () => {
+    it('sends unknown command error when handleCommand returns false', async () => {
       mockHandleCommand.mockResolvedValueOnce(false);
       const msg = createMockMessage({ text: '/unknown-cmd' });
 
       await onMessage(msg);
 
-      expect(mockSpawnAgent).toHaveBeenCalled();
+      expect(mockSpawnAgent).not.toHaveBeenCalled();
+      expect(msg.adapter.send).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown command'),
+      );
     });
   });
 
@@ -284,17 +287,29 @@ describe('routing - onMessage', () => {
       expect(adapter.send).toHaveBeenCalledWith(expect.stringContaining('reborn'));
     });
 
-    it('spawns new agent for reply to unknown message', async () => {
+    it('falls through to last-active when replying to unknown message', async () => {
+      mockGetMsgAgent.mockReturnValueOnce(undefined);
+      const mockAgent = { id: 'a1', name: 'Chase', status: 'active', parentId: null };
+      mockGetLastAgentForSource.mockReturnValueOnce(mockAgent);
+
+      const adapter = createMockAdapter({
+        getQuotedMessage: vi.fn(async () => ({ id: 'quoted-msg-unknown', body: 'some text' })),
+      });
+      const msg = createMockMessage({ adapter, isQuotedReply: true, text: 'reply to unknown' });
+
+      await onMessage(msg);
+
+      expect(mockSendToAgent).toHaveBeenCalledWith(mockAgent, expect.any(String), expect.any(Object), null, 'msg-1', null);
+      expect(mockSpawnAgent).not.toHaveBeenCalled();
+    });
+
+    it('spawns new agent when replying to unknown message with no last-active', async () => {
       mockGetMsgAgent.mockReturnValueOnce(undefined);
 
       const adapter = createMockAdapter({
         getQuotedMessage: vi.fn(async () => ({ id: 'quoted-msg-unknown', body: 'some text' })),
       });
-      const msg = createMockMessage({
-        adapter,
-        isQuotedReply: true,
-        text: 'reply to unknown',
-      });
+      const msg = createMockMessage({ adapter, isQuotedReply: true, text: 'reply to unknown' });
 
       await onMessage(msg);
 
@@ -332,7 +347,7 @@ describe('routing - onMessage', () => {
       expect(mockSendToAgent).not.toHaveBeenCalled();
     });
 
-    it('spawns new agent when last active is stopped', async () => {
+    it('spawns new agent when last active is not active', async () => {
       const stoppedAgent = { id: 'a1', name: 'Chase', status: 'stopped', parentId: null };
       mockGetLastAgentForSource.mockReturnValueOnce(stoppedAgent);
 
@@ -343,7 +358,6 @@ describe('routing - onMessage', () => {
     });
 
     it('spawns new agent when no last-active exists', async () => {
-      // default mock returns undefined — no explicit setup needed
       const msg = createMockMessage({ text: 'fresh start' });
       await onMessage(msg);
 
@@ -367,54 +381,34 @@ describe('routing - onMessage', () => {
   });
 
   describe('new agent spawn', () => {
-    it('spawns new agent for fresh message', async () => {
+    it('spawns new agent for fresh message with no last agent', async () => {
       const msg = createMockMessage({ text: 'fix the login page' });
 
       await onMessage(msg);
 
       expect(mockSpawnAgent).toHaveBeenCalledWith(
         expect.stringContaining('fix the login page'),
-        expect.any(Object), // adapter
-        null, // parentId
-        null, // listeningMsgId
-        'msg-1', // replyToId
-        null, // model
-        null, // forceName
-        null, // backendName
+        expect.any(Object), null, null, 'msg-1', null, null, null,
       );
     });
 
-    it('includes requested model from tags', async () => {
+    it('passes model tag to spawn', async () => {
       const msg = createMockMessage({ text: '#opus fix this bug' });
 
       await onMessage(msg);
 
       expect(mockSpawnAgent).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Object),
-        null,
-        null,
-        'msg-1',
-        'opus', // model extracted from tag
-        null,
-        null,
+        expect.any(String), expect.any(Object), null, null, 'msg-1', 'opus', null, null,
       );
     });
 
-    it('includes requested backend from tags', async () => {
+    it('passes backend tag to spawn', async () => {
       const msg = createMockMessage({ text: '#cursor fix this bug' });
 
       await onMessage(msg);
 
       expect(mockSpawnAgent).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Object),
-        null,
-        null,
-        'msg-1',
-        null,
-        null,
-        'cursor', // backend extracted from tag
+        expect.any(String), expect.any(Object), null, null, 'msg-1', null, null, 'cursor',
       );
     });
   });
@@ -486,11 +480,8 @@ describe('routing - onMessage', () => {
 
   describe('null safety', () => {
     it('does not crash when security guard is disabled and deps not initialized', async () => {
-      // Simulate a message when security guard is disabled (common case)
-      // The non-null assertions on _securityGuard! should not crash
       mockSecurityGuard.isEnabled.mockReturnValue(false);
       const msg = createMockMessage({ text: 'hello' });
-      // Should not throw
       await onMessage(msg);
       expect(mockSpawnAgent).toHaveBeenCalled();
     });

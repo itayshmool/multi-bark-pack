@@ -131,6 +131,10 @@ export async function onMessage(msg: NormalizedMessage): Promise<void> {
     }
     const handled = await handleCommand(body, msg, adapter, listeningMsgId);
     if (handled) return;
+    // Unknown /command — show error, do NOT fall through to agent routing
+    const unknownCmd = body.split(/\s+/)[0];
+    await adapter.send(`❓ Unknown command: \`${unknownCmd}\`\n\nType \`/help\` to see all commands.`);
+    return;
   }
 
   // Parse #model and #backend tags and strip from body
@@ -241,10 +245,10 @@ export async function onMessage(msg: NormalizedMessage): Promise<void> {
         }
       }
     }
-    console.log(`  ↳ Reply to unknown agent, spawning new`);
+    console.log(`  ↳ Reply to unknown agent, falling through to last-active`);
   }
 
-  // --- Route 3: Re-use last active agent, or spawn new ---
+  // --- Route 3: Re-use last active top-level agent, or spawn new ---
   const lastAgent = getLastAgentForSource(adapter.name);
   if (lastAgent && lastAgent.status === 'active' && !lastAgent.parentId) {
     console.log(`  ↳ Routed to ${lastAgent.name} (via last-active)`);
@@ -252,14 +256,5 @@ export async function onMessage(msg: NormalizedMessage): Promise<void> {
     return;
   }
 
-  spawnAgent(
-    fullBody,
-    adapter,
-    null,
-    listeningMsgId,
-    msg.id,
-    requestedModel,
-    null,
-    requestedBackend,
-  );
+  spawnAgent(fullBody, adapter, null, listeningMsgId, msg.id, requestedModel, null, requestedBackend);
 }

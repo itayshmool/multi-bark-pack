@@ -222,7 +222,7 @@ describe('command-registry', () => {
   it('has entries for every handler in commands.ts', () => {
     const requiredCmds = [
       '/help', '/status', '/backends', '/skills', '/skill',
-      '/losts', '/purge', '/reborn', '/create',
+      '/losts', '/purge', '/reborn', '/spawn',
       '/stop', '/stopall', '/clear', '/delete', '/reset',
       '/daily', '/stats', '/approve', '/deny',
       '/reload-policy', '/restart', '/shutdown',
@@ -794,7 +794,7 @@ describe('handleCommand', () => {
 
   // ── unknown command ─────────────────────────────────────────────────────────
   describe('unknown command', () => {
-    it('returns false to let routing handle it', async () => {
+    it('returns false (routing.ts will send unknown command error)', async () => {
       const result = await handleCommand('/nonexistent', makeMsg('/nonexistent'), makeAdapter(), null);
       expect(result).toBe(false);
     });

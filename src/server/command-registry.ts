@@ -93,10 +93,10 @@ export const COMMANDS: CommandSpec[] = [
     group: 'lifecycle',
   },
   {
-    cmd: '/create',
-    tgCmd: 'create',
+    cmd: '/spawn',
+    tgCmd: 'spawn',
     description: 'Spawn a new pup — reply to a message to give it context',
-    usage: '@Name task',
+    usage: '[@Name task]',
     group: 'lifecycle',
   },
   {
@@ -203,28 +203,30 @@ export function getCommandsByGroup(): Array<{ label: string; commands: CommandSp
 /** Compact /help view — all commands grouped, one line each, mobile-friendly */
 export function buildQuickView(activePupName?: string | null): string {
   const sections = getCommandsByGroup();
-  const lines: string[] = ['*🐾 All Commands*\n'];
+  const lines: string[] = ['*🐾 All Commands*', ''];
 
   for (const { label, commands } of sections) {
     // One compact line per group: `cmd1` · `cmd2` · ...
     const cmdList = commands
       .map(c => (c.usage ? `\`${c.cmd} ${c.usage}\`` : `\`${c.cmd}\``))
       .join(' · ');
-    lines.push(`*${label}*\n${cmdList}`);
+    lines.push(`*${label}*`);
+    lines.push(cmdList);
+    lines.push('');
   }
 
-  lines.push('');
   lines.push('*Routing:*');
   lines.push('Just message → last active pup');
   lines.push('`@Name msg` → specific pup · Reply → that pup');
   lines.push('`pack` = all pups in bulk commands');
   lines.push('');
   lines.push('`/help full` — descriptions for every command');
+  lines.push('');
 
   if (activePupName) {
-    lines.push(`\n💡 Active: *${activePupName}* — just send a message`);
+    lines.push(`💡 Active: *${activePupName}* — just send a message`);
   } else {
-    lines.push('\n💡 No active pup — send any message to spawn one');
+    lines.push('💡 No active pup — use `/spawn` to start one');
   }
 
   return lines.join('\n');
