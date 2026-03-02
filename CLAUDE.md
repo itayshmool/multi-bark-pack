@@ -2,6 +2,8 @@
 
 Multi-platform, multi-backend agent swarm. Messages in WhatsApp, Telegram, or Slack spawn LLM agent CLI instances in tmux sessions. Supports multiple backends: Claude Code, Cursor, and more. Each agent ("pup") has a persistent conversation via session management.
 
+> For codebase navigation, directory index, and quick-find commands see [AGENTS.md](AGENTS.md).
+
 ## Stack
 
 Node.js, whatsapp-web.js, @slack/web-api, @slack/socket-mode, tmux, whisper.cpp (voice transcription), ffmpeg
@@ -14,61 +16,57 @@ Node.js, whatsapp-web.js, @slack/web-api, @slack/socket-mode, tmux, whisper.cpp 
 
 ## Files
 
-- `server.js` — Main server: adapter manager, agent manager, message router
-- `stream-display.js` — Parses streaming output, writes progress/output files
-- `adapters/` — Chat platform adapters
-  - `whatsapp.js` — WhatsApp adapter (whatsapp-web.js)
-  - `telegram.js` — Telegram adapter (raw Bot API via fetch)
-  - `slack.js` — Slack adapter (Socket Mode)
-- `backends/` — LLM agent backends
-  - `index.js` — Backend registry and initialization
-  - `claude-code.js` — Claude Code CLI backend
-- `stream-parsers/` — Output format handlers
-  - `index.js` — Parser registry
-  - `claude.js` — Claude stream-json parser
-- `history/` — Server-side conversation tracking
-  - `index.js` — History manager API
-  - `storage.js` — JSON file storage per agent
-  - `summarizer.js` — Context prompt building
-- `fallback/` — Automatic agent recovery
-  - `index.js` — Fallback orchestrator
-  - `detector.js` — Failure classification
-  - `injector.js` — Context injection
-  - `config.js` — Configuration
-- `security/` — Message security screening
-  - `index.js` — Security guard: screens messages via Claude Code CLI (`claude -p`)
-  - `prompt.js` — System prompt for threat classification
-  - `logger.js` — Blocked message logging to `.bark-tmp/security.log`
-- `usage/` — Cost and token usage tracking
-  - `index.js` — Usage tracker: record, aggregate, query per-agent costs
-  - `storage.js` — Atomic JSON storage to `.bark-tmp/usage.json`
-- `timeline/` — Activity timeline: event capture, JSONL storage, real-time broadcast
-  - `index.js` — Timeline API: emit events, in-memory ring buffer (500), getAll/getRecent
-  - `storage.js` — JSONL append storage to `.bark-tmp/timeline.jsonl`
-- `skills/` — Cross-backend skill system
-  - `index.js` — Skills manager (loads once at startup)
-  - `parser.js` — SKILL.md parser (YAML frontmatter + markdown)
+- `src/server/` — Core server modules (entry point, routing, agents, execution, API, WebSocket, commands, state, approval)
+- `src/adapters/` — Chat platform adapters (WhatsApp, Telegram, Slack)
+- `src/backends/` — LLM agent backends (Claude Code, Cursor, Codex, Gemini) + shared utils
+- `src/stream-parsers/` — Output format handlers per backend
+- `src/stream-display.ts` — Standalone: parses streaming output, writes .progress/.out/.done/.violation files
+- `src/history/` — Server-side conversation tracking + rolling summaries
+- `src/fallback/` — Automatic agent recovery (retry → reset → switch backend)
+- `src/security/` — Message security screening via Claude Code CLI
+- `src/usage/` — Cost and token usage tracking per agent/backend
+- `src/timeline/` — Activity timeline (JSONL storage + in-memory ring buffer)
+- `src/skills/` — Cross-backend skill system (SKILL.md parser)
+- `src/config/` — Path constants, tool icon registry
+- `src/utils/` — Shared utilities (error, tokens, text, tags, agent-files, atomic-write)
+- `src/setup/` — Interactive setup wizard modules
+- `src/types/` — All TypeScript type definitions
 - `tools/bark` — CLI helper for pup delegation (`bark delegate "task"`)
 - `.claude/skills/` — Skill definitions (Claude Code compatible)
-- `prerequisites.sh` — System prerequisites checker/installer (Homebrew, Node, yarn, tmux, Claude CLI, ffmpeg, whisper)
-- `prerequisites-wix.sh` — Wix variant: switches to internal npm registry, then runs prerequisites.sh
-- `install-backends.sh` — Advanced backend installer: install, authenticate, verify all LLM backends + update .env
-- `start.sh` — Auto-restart wrapper: exits 0 → restarts, non-zero → stops
+- `scripts/` — Shell scripts
+  - `start.sh` — All-in-one server launcher: preflight checks, repo symlink, build, auto-restart loop. Supports `--path=` for targeting a specific repo.
+  - `setup.sh` — Interactive setup wizard (platforms, .env)
+  - `prerequisites.sh` — System prerequisites checker/installer (Homebrew, Node, yarn, tmux, Claude CLI, ffmpeg, whisper)
+  - `prerequisites-wix.sh` — Wix variant: switches to internal npm registry, then runs prerequisites.sh
+  - `install-backends.sh` — Advanced backend installer: install, authenticate, verify all LLM backends + update .env
+  - `install-whisper.sh` — Install ffmpeg + whisper.cpp + multilingual model
+  - `ensure-server.sh` — Crontab-friendly script: ensures server is always running
+  - `gather-cursor.sh` — Export Cursor CLI auth to a tarball (for migration)
+  - `restore-cursor.sh` — Import Cursor CLI auth from a tarball
+  - `use-wix-registry.sh` — Swap yarn.lock for Wix internal npm registry
+- `bark-policy.json` — Approval policy: rules, actions, barkignore (copy from `bark-policy.default.json`)
 - `agents.json` — Runtime state: active + soft-deleted agents (gitignored)
 - `routing.json` — Message ID → agent ID map, all platforms (gitignored)
 - `status.json` — Pinned status message IDs, persisted across restarts (gitignored)
-- `.bark-tmp/` — Per-agent temp files: `.prompt`, `.out`, `.done`, `.progress`, `.cwd`, `.running`, `.sh`, `.sysprompt`, `.history.json` (gitignored)
+- `.bark-tmp/` — Per-agent temp files: `.prompt`, `.out`, `.done`, `.progress`, `.cwd`, `.running`, `.sh`, `.sysprompt`, `.history.json`, `approval.log` (gitignored)
 - `.bark-tmp/{id}-send/` — Per-agent outbox: pups drop files here, server delivers via `sendFile()` (gitignored)
 - `projects/` — Pup working directory: repos are cloned here (gitignored, auto-created)
+- `docs/APPROVAL.md` — Approval flow & policy engine documentation
 - `docs/plans/` — Implementation plans
 
 ## Commands
 
 ```
-yarn start              # Start the server (auto-restarts on clean exit)
-node server.js          # Start without auto-restart wrapper
-tmux ls                 # List active agent sessions
-tmux attach -t bark-Chase  # Watch a specific pup work
+yarn start                         # Start the server on current directory
+yarn start --path=/path/to/repo    # Start with a specific repo
+yarn dev                           # Dev mode with tsx --watch
+yarn build                         # Compile TypeScript
+yarn typecheck                     # Type-check without emitting
+yarn test                          # Run all Vitest tests (270 tests)
+yarn test:watch                    # Vitest in watch mode
+yarn test:legacy                   # Run legacy Phase 1 tests
+tmux ls                            # List active agent sessions
+tmux attach -t bark-Chase          # Watch a specific pup work
 ```
 
 ### Commands (all platforms)
@@ -92,11 +90,14 @@ tmux attach -t bark-Chase  # Watch a specific pup work
 - `/daily` — request a one-line standup from every active pup
 - `/stats` — show usage & cost summary (per-backend, per-pup)
 - `/stats name` — show detailed stats for a specific pup
+- `/approve name` — approve a pup's pending operation
+- `/deny name` — deny a pup's pending operation
+- `/reload-policy` — hot-reload bark-policy.json without restarting
 - `/help` — show command list
-- `/restart` — restart the server (auto-restarts via start.sh)
+- `/restart` — restart the server (auto-restarts via scripts/start.sh)
 - `/shutdown` — shut down the server without auto-restarting
 
-Use `pack` instead of name for bulk operations (e.g., `/stop pack`, `/clear pack`, `/delete pack`, `/reset pack`).
+Use `pack` instead of name for bulk operations (e.g., `/stop pack`, `/clear pack`, `/delete pack`, `/reset pack`, `/approve pack`, `/deny pack`).
 
 **Multi-LLM:** Add `#claude-code`, `#cursor`, `#codex`, or `#gemini` to select backend. Add `#haiku`, `#sonnet`, or `#opus` to select model. Example: `#cursor #opus fix this bug`.
 
@@ -154,6 +155,8 @@ Context is preserved via rolling summaries + recent turns. History files stored 
 
 **Pup Delegation:** Pups can spawn independent sub-agents using the `bark` CLI tool (`bark delegate "task"` or `bark delegate "task" --branch`). This is "delegate and forget" — the sub-agent works autonomously, appears in chat and the admin UI, and does not report results back to the parent. Sub-agents automatically inherit the parent's context (conversation summary, working directory, modified files). By default (soft mode), the sub-agent works on the same branch. With `--branch`, the sub-agent creates its own branch (`bark/{name}`) and opens a PR when done. Delegation instructions are injected into the system prompt of top-level agents only. Sub-agents cannot delegate further (max depth: 1). Each parent can have at most 3 active sub-agents (`MAX_SUB_AGENTS`). The `parentId` field on the agent object tracks the relationship. When a parent is cleared/deleted, sub-agents continue independently. The status message shows sub-agents with a `↳ParentName` tag. Agent cards in the admin UI show parent and sub-agent names, and sub-agent cards are visually indented. The `bark` CLI helper lives in `tools/bark` and is added to PATH in every tmux session via `BARK_AGENT_ID` and `BARK_API` env vars.
 
+**Approval Flow:** Pups pause before dangerous operations and request user approval in chat. A policy engine (`bark-policy.json`) defines rules per tool: `auto_approve` (silent pass), `require_approval` (ask user), or `block` (deny immediately). Default action is `block` — all unconfigured tools are blocked. Three-layer defense: system prompt guides the agent, stream detection catches violations in real-time, post-turn gate holds responses until approved. Users approve/deny by replying to the approval message (text or voice), using `/approve`/`/deny` commands, or natural phrases like "sure", "go ahead", "nah". Timeout defaults to 5 minutes (auto-deny). The `barkignore` field in `bark-policy.json` protects sensitive files (`.env`, secrets) from being read/written. Invalid rules are skipped with warnings at load time (no server crash). Policy can be hot-reloaded via `/reload-policy`. All decisions are audit-logged to `.bark-tmp/approval.log` (JSONL). Multi-adapter: approvals are resolved on the correct platform even with WhatsApp + Telegram + Slack running simultaneously. Status pin shows `⏳approval` for agents awaiting approval. See [docs/APPROVAL.md](docs/APPROVAL.md) for full configuration reference.
+
 ## Configuration
 
 ```bash
@@ -192,6 +195,10 @@ API_SECRET=your-secret-here
 # Pup Delegation
 MAX_DELEGATION_DEPTH=1
 MAX_SUB_AGENTS=3
+
+# Approval Flow (see docs/APPROVAL.md)
+# Configure via bark-policy.json (copy bark-policy.default.json)
+# Default action: block (all unconfigured tools are blocked)
 ```
 
 ## Key constraints
@@ -222,5 +229,5 @@ All commits must end with a pup credit line:
 ## Do not
 
 - Edit `.wwebjs_auth/` — WhatsApp session auth, breaks login if modified
-- Run `node server.js` inside another Claude Code session — nesting error
+- Run `node dist/server/index.js` inside another Claude Code session — nesting error
 - Commit or push without explicit user approval — see git rules above

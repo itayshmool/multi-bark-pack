@@ -1,6 +1,25 @@
 {
-  "activePack": "israeli-ministers",
+  "activePack": "simple",
   "packs": {
+    "simple": {
+      "id": "simple",
+      "name": "Simple",
+      "icon": "🤖",
+      "names": [
+        "Ace", "Ada", "Ben", "Cal", "Dan", "Dev", "Eli", "Eva",
+        "Fay", "Fox", "Gem", "Hal", "Ian", "Ivy", "Jay", "Kay",
+        "Leo", "Max", "Mia", "Neo", "Ora", "Pax", "Rex", "Sam",
+        "Tia", "Uma", "Val", "Win", "Xen", "Zak", "Zoe", "Rue"
+      ],
+      "adjectives": [
+        "fast", "bold", "cool", "deep", "keen", "lean", "next",
+        "pure", "slim", "wise", "zen", "top", "raw", "live",
+        "meta", "beta", "nova", "core", "base", "dual", "mega",
+        "nano", "turbo", "proto", "alpha", "delta", "sigma",
+        "prime", "swift", "sharp", "smart", "ultra"
+      ],
+      "builtin": true
+    },
     "paw-patrol": {
       "id": "paw-patrol",
       "name": "Paw Patrol",

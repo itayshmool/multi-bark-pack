@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "octocode": {
+      "command": "npx",
+      "args": ["octocode-mcp@latest"],
+      "env": {
+        "ENABLE_LOCAL": "true"
+      }
+    }
+  }
+}

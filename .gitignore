@@ -6,11 +6,16 @@ package-lock.json
 agents.json
 routing.json
 status.json
+bark-policy.json
 projects/
 .env
 .env.local
 tools-registry.json
 
+# Build output
+dist/
+
 # Claude Code local settings (contains user-specific paths)
 .claude/settings.local.json
 .claude/plans/
+localRun.sh
