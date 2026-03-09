@@ -6,6 +6,12 @@ Multi-platform, multi-backend AI agent swarm. Send a message in WhatsApp, Telegr
 
 > **Platform note:** multi-bark-pack is developed and tested on macOS with Homebrew. Linux should work but paths may differ. Contributions welcome.
 
+## Visuals
+
+### Telegram Agent Interaction
+![Telegram Agent](docs/telegram-agent.png)
+*Live agent streaming fixes and test results directly into a Telegram group chat.*
+
 ## Table of contents
 
 - [Supported Backends](#supported-backends)
