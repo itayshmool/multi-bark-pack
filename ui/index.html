@@ -575,6 +575,15 @@
             background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
         }
 
+        .bulk-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .bulk-actions .btn {
+            font-size: 0.65rem;
+            padding: 3px 10px;
+        }
+
         /* ═══════════════════════════════════════════════════════════════
            AGENT GRID
            ═══════════════════════════════════════════════════════════════ */
@@ -2053,6 +2062,11 @@
         <div class="section-header">
             <span class="section-title">Active Pups</span>
             <span class="section-count" id="active-count">0</span>
+            <div class="bulk-actions" id="bulk-actions" style="display:none;">
+                <button class="btn btn-stop" onclick="bulkAction('stop')">Stop All</button>
+                <button class="btn btn-clear" onclick="bulkAction('clear')">Clear All</button>
+                <button class="btn btn-delete" onclick="bulkAction('delete')">Delete All</button>
+            </div>
             <div class="section-line"></div>
         </div>
 
@@ -2361,6 +2375,7 @@
         const backendsList = document.getElementById('backends-list');
         const agentsGrid = document.getElementById('agents-grid');
         const activeCount = document.getElementById('active-count');
+        const bulkActions = document.getElementById('bulk-actions');
         const shelvedSection = document.getElementById('shelved-section');
         const shelvedGrid = document.getElementById('shelved-grid');
         const shelvedCount = document.getElementById('shelved-count');
@@ -2431,6 +2446,29 @@
                 closeModal();
             } catch (err) {
                 console.error('Failed to delete agent:', err);
+            }
+        }
+
+        function getFilteredAgentIds() {
+            let filtered = agents.filter(a => a.status !== 'deleted');
+            if (filterStatus) filtered = filtered.filter(a => getStatusClass(a) === filterStatus);
+            if (filterBackend) filtered = filtered.filter(a => a.backend === filterBackend);
+            return filtered.map(a => a.id);
+        }
+
+        async function bulkAction(action) {
+            const ids = getFilteredAgentIds();
+            if (ids.length === 0) return;
+            const label = action === 'stop' ? 'Stop' : action === 'clear' ? 'Clear' : 'Delete';
+            if (!confirm(`${label} ${ids.length} pup${ids.length > 1 ? 's' : ''}?`)) return;
+            try {
+                await apiFetch(`${API_BASE}/agents/bulk`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, ids }),
+                });
+            } catch (err) {
+                console.error(`Bulk ${action} failed:`, err);
             }
         }
 
@@ -2669,6 +2707,7 @@
             }
 
             activeCount.textContent = filtered.length + (filtered.length !== active.length ? '/' + active.length : '');
+            bulkActions.style.display = (filterStatus || filterBackend) && filtered.length > 0 ? 'flex' : 'none';
 
             if (filtered.length === 0) {
                 const hasFilters = filterStatus || filterBackend;

@@ -207,6 +207,39 @@ export function setupApiRoutes(app: Express, deps: ApiDeps): void {
     }
   });
 
+  // REST API: Bulk agent operations (stop/clear/delete by IDs)
+  app.post('/api/agents/bulk', (req: Request, res: Response) => {
+    const { action, ids } = req.body as { action?: string; ids?: string[] };
+    if (!action || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Missing action or ids' });
+    }
+    const names: string[] = [];
+    const allAgents = getAgents();
+    const deleted = getDeletedAgents();
+    for (const id of ids) {
+      const agent = allAgents.get(id) || deleted.get(id);
+      if (agent) names.push(agent.name);
+    }
+    if (names.length === 0) return res.status(404).json({ error: 'No matching agents' });
+
+    let result: Record<string, unknown>;
+    switch (action) {
+      case 'stop':
+        result = stopAgents(names);
+        break;
+      case 'clear':
+        result = clearAgents(names);
+        break;
+      case 'delete':
+        result = deleteAgents(names);
+        break;
+      default:
+        return res.status(400).json({ error: `Unknown action: ${action}` });
+    }
+    broadcastAgents();
+    res.json({ success: true, ...result });
+  });
+
   // REST API: Stop agent
   app.post('/api/agents/:id/stop', (req: Request, res: Response) => {
     const agent = getAgents().get(req.params.id);

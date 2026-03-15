@@ -99,6 +99,8 @@ tmux attach -t bark-Chase          # Watch a specific pup work
 
 Use `pack` instead of name for bulk operations (e.g., `/stop pack`, `/clear pack`, `/delete pack`, `/reset pack`, `/approve pack`, `/deny pack`).
 
+**Admin UI bulk actions:** When filters are active (status or backend) in Mission Control, bulk **Stop All** / **Clear All** / **Delete All** buttons appear next to the pup count. These operate on the currently filtered set of agents via `POST /api/agents/bulk`.
+
 **Multi-LLM:** Add `#claude-code`, `#cursor`, `#codex`, or `#gemini` to select backend. Add `#haiku`, `#sonnet`, or `#opus` to select model. Example: `#cursor #opus fix this bug`.
 
 **Routing:** `@name msg` sends to a specific pup. Reply to a pup's message to continue. New messages spawn a new pup.
