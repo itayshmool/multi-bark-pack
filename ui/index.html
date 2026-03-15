@@ -2062,7 +2062,7 @@
         <div class="section-header">
             <span class="section-title">Active Pups</span>
             <span class="section-count" id="active-count">0</span>
-            <div class="bulk-actions" id="bulk-actions" style="display:none;">
+            <div class="bulk-actions" id="bulk-actions">
                 <button class="btn btn-stop" onclick="bulkAction('stop')">Stop All</button>
                 <button class="btn btn-clear" onclick="bulkAction('clear')">Clear All</button>
                 <button class="btn btn-delete" onclick="bulkAction('delete')">Delete All</button>
@@ -2460,7 +2460,8 @@
             const ids = getFilteredAgentIds();
             if (ids.length === 0) return;
             const label = action === 'stop' ? 'Stop' : action === 'clear' ? 'Clear' : 'Delete';
-            if (!confirm(`${label} ${ids.length} pup${ids.length > 1 ? 's' : ''}?`)) return;
+            const scope = (filterStatus || filterBackend) ? 'filtered' : 'all';
+            if (!confirm(`${label} ${ids.length} ${scope} pup${ids.length > 1 ? 's' : ''}?`)) return;
             try {
                 await apiFetch(`${API_BASE}/agents/bulk`, {
                     method: 'POST',
@@ -2707,7 +2708,7 @@
             }
 
             activeCount.textContent = filtered.length + (filtered.length !== active.length ? '/' + active.length : '');
-            bulkActions.style.display = (filterStatus || filterBackend) && filtered.length > 0 ? 'flex' : 'none';
+            bulkActions.style.display = filtered.length > 0 ? 'flex' : 'none';
 
             if (filtered.length === 0) {
                 const hasFilters = filterStatus || filterBackend;
