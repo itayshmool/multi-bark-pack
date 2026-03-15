@@ -91,37 +91,53 @@
             position: relative;
         }
 
-        /* CRT Scan Lines Overlay */
+        /* Background pattern overlays — applied via body class */
         body::before {
             content: '';
             position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 2px,
-                rgba(0, 0, 0, 0.15) 2px,
-                rgba(0, 0, 0, 0.15) 4px
-            );
+            top: 0; left: 0; right: 0; bottom: 0;
             pointer-events: none;
             z-index: 9999;
+            display: none;
         }
 
-        /* Subtle vignette */
+        /* Subtle vignette — shown with all patterns except bg-clean */
         body::after {
             content: '';
             position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
+            top: 0; left: 0; right: 0; bottom: 0;
             background: radial-gradient(ellipse at center, transparent 0%, transparent 60%, rgba(0, 0, 0, 0.4) 100%);
             pointer-events: none;
             z-index: 9998;
         }
+
+        /* Paw Patrol — CRT scanlines */
+        body.bg-scanlines::before {
+            display: block;
+            background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.15) 2px, rgba(0, 0, 0, 0.15) 4px);
+        }
+
+        /* Mario Kart — checkered flag */
+        body.bg-checkered::before {
+            display: block;
+            background-image:
+                linear-gradient(45deg, rgba(255,255,255,0.02) 25%, transparent 25%),
+                linear-gradient(-45deg, rgba(255,255,255,0.02) 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.02) 75%),
+                linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.02) 75%);
+            background-size: 40px 40px;
+            background-position: 0 0, 0 20px, 20px -20px, -20px 0;
+        }
+
+        /* Pokemon — diagonal stripes */
+        body.bg-stripes::before {
+            display: block;
+            background: repeating-linear-gradient(-45deg, transparent, transparent 10px, rgba(255, 255, 255, 0.015) 10px, rgba(255, 255, 255, 0.015) 20px);
+        }
+
+        /* Israeli Ministers — clean, no pattern, no vignette */
+        body.bg-clean::before { display: none; }
+        body.bg-clean::after { display: none; }
 
         .container {
             max-width: 1400px;
@@ -2474,6 +2490,87 @@
         }
 
         // ═══════════════════════════════════════════════════════════════
+        // PACK THEMES
+        // ═══════════════════════════════════════════════════════════════
+        const PACK_THEMES = {
+            'paw-patrol': {
+                title: 'bark-pack // mission control',
+                logoIcon: '🐾', logoText: 'bark-pack', subtitle: 'mission control',
+                accent: '#00ff41', accentDim: '#00cc33',
+                accentGlow: 'rgba(0, 255, 65, 0.15)', accentText: '#b8ffca',
+                secondary: '#00d4ff', secondaryGlow: 'rgba(0, 212, 255, 0.2)',
+                bgPattern: 'bg-scanlines',
+                favicon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#0d1117"/><g fill="#58a6ff"><ellipse cx="22" cy="16" rx="7" ry="9" transform="rotate(-20 22 16)"/><ellipse cx="42" cy="16" rx="7" ry="9" transform="rotate(20 42 16)"/><ellipse cx="14" cy="30" rx="6" ry="8" transform="rotate(-30 14 30)"/><ellipse cx="50" cy="30" rx="6" ry="8" transform="rotate(30 50 30)"/><ellipse cx="32" cy="40" rx="12" ry="10"/></g></svg>`,
+            },
+            'mario-kart': {
+                title: 'kart-pack // race control',
+                logoIcon: '🍄', logoText: 'kart-pack', subtitle: 'race control',
+                accent: '#e52521', accentDim: '#c41e1a',
+                accentGlow: 'rgba(229, 37, 33, 0.15)', accentText: '#ffb3b1',
+                secondary: '#fbd000', secondaryGlow: 'rgba(251, 208, 0, 0.2)',
+                bgPattern: 'bg-checkered',
+                favicon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#1a0a0a"/><circle cx="32" cy="30" r="18" fill="#e52521"/><circle cx="32" cy="30" r="10" fill="#fff"/><circle cx="32" cy="30" r="5" fill="#e52521"/></svg>`,
+            },
+            'pokemon': {
+                title: 'poke-pack // trainer hub',
+                logoIcon: '⚡', logoText: 'poke-pack', subtitle: 'trainer hub',
+                accent: '#ffcc00', accentDim: '#d4a800',
+                accentGlow: 'rgba(255, 204, 0, 0.15)', accentText: '#fff4b3',
+                secondary: '#cc0000', secondaryGlow: 'rgba(204, 0, 0, 0.2)',
+                bgPattern: 'bg-stripes',
+                favicon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#1a1400"/><polygon points="32,8 40,28 24,28" fill="#ffcc00"/><polygon points="32,56 24,36 40,36" fill="#ffcc00"/><rect x="20" y="28" width="24" height="8" fill="#ffcc00"/></svg>`,
+            },
+            'israeli-ministers': {
+                title: 'knesset-pack // coalition control',
+                logoIcon: '🇮🇱', logoText: 'knesset-pack', subtitle: 'coalition control',
+                accent: '#0038b8', accentDim: '#002d94',
+                accentGlow: 'rgba(0, 56, 184, 0.15)', accentText: '#b3ceff',
+                secondary: '#ffffff', secondaryGlow: 'rgba(255, 255, 255, 0.15)',
+                bgPattern: 'bg-clean',
+                favicon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#0a1428"/><polygon points="32,12 38,24 50,24 40,32 44,44 32,36 20,44 24,32 14,24 26,24" fill="#0038b8" stroke="#4a8aff" stroke-width="1"/></svg>`,
+            },
+        };
+        const DEFAULT_THEME = PACK_THEMES['paw-patrol'];
+
+        function applyPackTheme(packId) {
+            const theme = PACK_THEMES[packId] || DEFAULT_THEME;
+            const root = document.documentElement.style;
+            root.setProperty('--phosphor', theme.accent);
+            root.setProperty('--phosphor-dim', theme.accentDim);
+            root.setProperty('--phosphor-glow', theme.accentGlow);
+            root.setProperty('--phosphor-text', theme.accentText);
+            root.setProperty('--cyan', theme.secondary);
+            root.setProperty('--cyan-glow', theme.secondaryGlow);
+            const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+            if (isLight) {
+                root.setProperty('--phosphor', theme.accentDim);
+                root.setProperty('--phosphor-dim', theme.accent);
+                root.setProperty('--phosphor-text', theme.accentDim);
+            }
+            document.title = theme.title;
+            const logoIcon = document.querySelector('.logo-icon');
+            const logoText = document.querySelector('.logo-text');
+            const logoSub = document.querySelector('.logo-subtitle');
+            if (logoIcon) logoIcon.textContent = theme.logoIcon;
+            if (logoText) logoText.textContent = theme.logoText;
+            if (logoSub) logoSub.textContent = theme.subtitle;
+            const faviconEl = document.querySelector('link[rel="icon"]');
+            if (faviconEl) {
+                faviconEl.href = 'data:image/svg+xml,' + encodeURIComponent(theme.favicon);
+            }
+            document.body.classList.remove('bg-scanlines', 'bg-checkered', 'bg-stripes', 'bg-clean');
+            document.body.classList.add(theme.bgPattern);
+            localStorage.setItem('packTheme', packId || '');
+        }
+
+        // Apply cached theme immediately to avoid flash
+        (function() {
+            const cached = localStorage.getItem('packTheme');
+            if (cached) applyPackTheme(cached);
+            else applyPackTheme('paw-patrol');
+        })();
+
+        // ═══════════════════════════════════════════════════════════════
         // PACK API
         // ═══════════════════════════════════════════════════════════════
         async function fetchPacks() {
@@ -2481,6 +2578,7 @@
                 const res = await apiFetch(`${API_BASE}/packs`);
                 packsData = await res.json();
                 renderPacks();
+                applyPackTheme(packsData.activePack);
             } catch (err) {
                 console.error('Failed to fetch packs:', err);
             }
@@ -2629,6 +2727,7 @@
                 case 'packs':
                     packsData = data.packs;
                     renderPacks();
+                    applyPackTheme(packsData.activePack);
                     break;
                 case 'usage_update':
                     if (document.querySelector('.tab.active')?.dataset.tab === 'stats') {
@@ -3798,6 +3897,8 @@
         function toggleTheme() {
             const current = document.documentElement.getAttribute('data-theme') || 'dark';
             setTheme(current === 'dark' ? 'light' : 'dark');
+            // Re-apply pack theme so accent colors adjust for light/dark
+            if (packsData.activePack) applyPackTheme(packsData.activePack);
         }
 
         // Load saved theme or default to dark
