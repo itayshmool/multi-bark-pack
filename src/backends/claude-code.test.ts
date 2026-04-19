@@ -27,8 +27,8 @@ describe('claude-code backend', () => {
       expect(backend.models).toEqual(['opus', 'sonnet', 'haiku']);
     });
 
-    it('has defaultModel: sonnet', () => {
-      expect(backend.defaultModel).toBe('sonnet');
+    it('has defaultModel: opus', () => {
+      expect(backend.defaultModel).toBe('opus');
     });
 
     it('canResume is true', () => {
