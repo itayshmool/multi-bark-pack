@@ -28,11 +28,16 @@ function createTelegramAdapter({ token, chatId }) {
         const data = await res.json();
         if (!data.ok) {
             // Handle rate limiting with retry
-            if (data.error_code === 429 && data.parameters?.retry_after && retries > 0) {
-                const delay = (data.parameters.retry_after + 1) * 1000;
-                console.log(`  ⏳ Telegram rate limited, waiting ${data.parameters.retry_after}s...`);
-                await new Promise(r => setTimeout(r, delay));
-                return api(method, body, retries - 1);
+            if (data.error_code === 429 && data.parameters?.retry_after) {
+                if (retries > 0) {
+                    const delay = (data.parameters.retry_after + 1) * 1000;
+                    console.log(`  ⏳ Telegram rate limited, waiting ${data.parameters.retry_after}s...`);
+                    await new Promise(r => setTimeout(r, delay));
+                    return api(method, body, retries - 1);
+                }
+                // Exhausted retries — don't crash, just warn and return null
+                console.log(`  ⚠️ Telegram rate limit persists for ${method}, skipping after ${3} retries`);
+                return null;
             }
             throw new Error(`Telegram API ${method}: ${data.description || 'unknown error'}`);
         }
@@ -45,24 +50,64 @@ function createTelegramAdapter({ token, chatId }) {
                 const updates = await api('getUpdates', {
                     timeout: 30,
                     offset: lastUpdateId + 1,
-                    allowed_updates: ['message'],
+                    allowed_updates: ['message', 'my_chat_member', 'callback_query'],
                 });
 
                 consecutivePollErrors = 0; // reset on success
                 for (const update of updates) {
                     lastUpdateId = update.update_id;
+                    // Handle callback queries (inline button taps)
+                    if (update.callback_query && adapter.onCallbackQuery) {
+                        await adapter.onCallbackQuery(update.callback_query);
+                        continue;
+                    }
+
                     const msg = update.message;
                     if (!msg) continue;
+
+                    // Handle group → supergroup migration
+                    if (msg.migrate_to_chat_id) {
+                        const newChatId = String(msg.migrate_to_chat_id);
+                        console.log(`Telegram group migrated: ${defaultChatId} → ${newChatId}`);
+                        defaultChatId = newChatId;
+                        try { writeFileSync(CHAT_ID_FILE, defaultChatId); } catch {}
+                        // Re-detect forum mode on the new supergroup
+                        api('getChat', { chat_id: defaultChatId }).then(chat => {
+                            const wasForum = adapter.isForum;
+                            adapter.isForum = !!chat.is_forum;
+                            if (adapter.isForum && !wasForum) {
+                                console.log('  🧵 Telegram group has topics enabled (forum mode)');
+                            }
+                        }).catch(() => {});
+                        continue;
+                    }
 
                     // Auto-detect chat ID from first message (any chat type)
                     if (!defaultChatId) {
                         defaultChatId = String(msg.chat.id);
                         try { writeFileSync(CHAT_ID_FILE, defaultChatId); } catch {}
                         console.log(`Telegram auto-detected chat ID: ${defaultChatId} (${msg.chat.type})`);
+                        // Detect forum mode now that we have a chat ID
+                        api('getChat', { chat_id: defaultChatId }).then(chat => {
+                            if (chat.is_forum) {
+                                adapter.isForum = true;
+                                console.log('  🧵 Telegram group has topics enabled (forum mode)');
+                            }
+                        }).catch(() => {});
                     }
 
                     // Only process messages from the configured chat
                     if (String(msg.chat.id) !== String(defaultChatId)) continue;
+
+                    // Live-detect forum mode changes (Telegram includes is_forum in chat object on messages)
+                    const wasForum = adapter.isForum;
+                    adapter.isForum = !!msg.chat.is_forum;
+                    if (wasForum && !adapter.isForum) {
+                        console.log('  🧵 Telegram topics disabled — switching to flat chat mode');
+                        if (adapter.onForumDisabled) adapter.onForumDisabled();
+                    } else if (!wasForum && adapter.isForum) {
+                        console.log('  🧵 Telegram topics enabled — switching to forum mode');
+                    }
 
                     // Skip messages with no sender (channel posts, anonymous)
                     if (!msg.from) continue;
@@ -94,6 +139,7 @@ function createTelegramAdapter({ token, chatId }) {
                         hasMedia,
                         mediaType,
                         isQuotedReply: !!msg.reply_to_message,
+                        threadId: msg.message_thread_id || null,
                         raw: msg,
                         adapter,
                     };
@@ -114,6 +160,7 @@ function createTelegramAdapter({ token, chatId }) {
     const adapter = {
         name: 'telegram',
         _botInfo: null,
+        isForum: false,
         capabilities: { finalMessageBehavior: 'send' },
 
         async initialize(onMessage) {
@@ -124,6 +171,16 @@ function createTelegramAdapter({ token, chatId }) {
 
             if (defaultChatId) {
                 console.log(`Telegram listening on chat: ${defaultChatId}`);
+                // Detect forum/topics mode
+                try {
+                    const chat = await api('getChat', { chat_id: defaultChatId });
+                    if (chat.is_forum) {
+                        adapter.isForum = true;
+                        console.log('  🧵 Telegram group has topics enabled (forum mode)');
+                    }
+                } catch (e) {
+                    console.log(`  ⚠️ Could not check Telegram forum status: ${e.message}`);
+                }
                 // Clean up stale pins from previous session
                 try {
                     await api('unpinAllChatMessages', { chat_id: defaultChatId });
@@ -152,7 +209,40 @@ function createTelegramAdapter({ token, chatId }) {
             return polling && !!defaultChatId;
         },
 
-        async send(text, replyToId) {
+        async createForumTopic(name) {
+            if (!defaultChatId) throw new Error('No chat ID');
+            const result = await api('createForumTopic', { chat_id: defaultChatId, name });
+            return result.message_thread_id;
+        },
+
+        async deleteForumTopic(threadId) {
+            if (!defaultChatId) return;
+            try {
+                await api('deleteForumTopic', { chat_id: defaultChatId, message_thread_id: threadId });
+            } catch (e) {
+                console.log(`  ⚠️ Could not delete Telegram topic ${threadId}: ${e.message}`);
+            }
+        },
+
+        async closeForumTopic(threadId) {
+            if (!defaultChatId) return;
+            try {
+                await api('closeForumTopic', { chat_id: defaultChatId, message_thread_id: threadId });
+            } catch (e) {
+                console.log(`  ⚠️ Could not close Telegram topic ${threadId}: ${e.message}`);
+            }
+        },
+
+        async reopenForumTopic(threadId) {
+            if (!defaultChatId) return;
+            try {
+                await api('reopenForumTopic', { chat_id: defaultChatId, message_thread_id: threadId });
+            } catch (e) {
+                console.log(`  ⚠️ Could not reopen Telegram topic ${threadId}: ${e.message}`);
+            }
+        },
+
+        async send(text, replyToId, threadId, replyMarkup) {
             if (!defaultChatId) {
                 console.log('  ⚠️ Telegram send skipped — chat ID not set yet');
                 return null;
@@ -162,9 +252,9 @@ function createTelegramAdapter({ token, chatId }) {
                 text: truncateTelegram(text),
                 parse_mode: 'Markdown',
             };
-            if (replyToId) {
-                body.reply_to_message_id = stripPrefix(replyToId);
-            }
+            if (replyToId) body.reply_to_message_id = stripPrefix(replyToId);
+            if (threadId) body.message_thread_id = threadId;
+            if (replyMarkup) body.reply_markup = replyMarkup;
             try {
                 const result = await api('sendMessage', body);
                 return 'tg:' + result.message_id;
@@ -180,7 +270,7 @@ function createTelegramAdapter({ token, chatId }) {
             }
         },
 
-        async sendFile(filePath, caption, replyToId) {
+        async sendFile(filePath, caption, replyToId, threadId) {
             if (!defaultChatId) {
                 console.log('  ⚠️ Telegram sendFile skipped — chat ID not set yet');
                 return null;
@@ -200,6 +290,7 @@ function createTelegramAdapter({ token, chatId }) {
                 form.append(fieldName, new Blob([readFileSync(filePath)]), path.basename(filePath));
                 if (caption) form.append('caption', caption);
                 if (replyToId) form.append('reply_to_message_id', stripPrefix(replyToId));
+                if (threadId) form.append('message_thread_id', String(threadId));
 
                 const res = await fetch(`${BASE}/${method}`, { method: 'POST', body: form });
                 const data = await res.json();
@@ -325,6 +416,41 @@ function createTelegramAdapter({ token, chatId }) {
                 id: 'tg:' + reply.message_id,
                 body: reply.text || reply.caption || '',
             };
+        },
+
+        async answerCallbackQuery(callbackQueryId, text) {
+            try {
+                await api('answerCallbackQuery', { callback_query_id: callbackQueryId, text });
+            } catch (e) {
+                console.log(`  ⚠️ Could not answer callback query: ${e.message}`);
+            }
+        },
+
+        async forwardMessage(msgId, toThreadId) {
+            if (!defaultChatId) return;
+            try {
+                await api('forwardMessage', {
+                    chat_id: defaultChatId,
+                    from_chat_id: defaultChatId,
+                    message_id: Number(stripPrefix(msgId)),
+                    message_thread_id: toThreadId,
+                });
+            } catch (e) {
+                console.log(`  ⚠️ Could not forward message ${msgId}: ${e.message}`);
+            }
+        },
+
+        async removeReplyMarkup(msgId) {
+            if (!defaultChatId) return;
+            try {
+                await api('editMessageReplyMarkup', {
+                    chat_id: defaultChatId,
+                    message_id: Number(stripPrefix(msgId)),
+                    reply_markup: { inline_keyboard: [] },
+                });
+            } catch (e) {
+                console.log(`  ⚠️ Could not remove reply markup: ${e.message}`);
+            }
         },
 
         async sendGoodbye() {
